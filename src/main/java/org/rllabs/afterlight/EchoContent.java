@@ -1,11 +1,13 @@
 package org.rllabs.afterlight;
 
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Rarity;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.SoundType;
@@ -27,6 +29,7 @@ import org.rllabs.afterlight.gate.GateControllerBlock;
 import org.rllabs.afterlight.gate.GateControllerBlockEntity;
 import org.rllabs.afterlight.gate.GateFieldBlock;
 import org.rllabs.afterlight.gate.GateFieldBlockEntity;
+import org.rllabs.afterlight.gate.GateReturnTarget;
 import org.rllabs.afterlight.network.AfterlightPayloads;
 import org.rllabs.afterlight.relay.FutureConsoleBlock;
 import org.rllabs.afterlight.relay.ReturnTerminalBlock;
@@ -72,6 +75,15 @@ public final class EchoContent {
                                             SyncAttachmentsPayload.TYPE.id()),
                             ECHO_BOND_STREAM_CODEC)
                     .build());
+
+    public static final DeferredHolder<AttachmentType<?>, AttachmentType<GateReturnTarget>>
+            GATE_RETURN_TARGET = ATTACHMENTS.register(
+                    "gate_return_target",
+                    () -> AttachmentType.builder(() -> new GateReturnTarget(
+                                    Level.OVERWORLD, BlockPos.ZERO, 0.0F, 0.0F))
+                            .serialize(GateReturnTarget.CODEC)
+                            .copyOnDeath()
+                            .build());
 
     public static final DeferredItem<EchoItem> ECHO = ITEMS.registerItem(
             "echo",

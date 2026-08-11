@@ -1,6 +1,9 @@
 package org.rllabs.afterlight.gate;
 
 import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
@@ -19,6 +22,23 @@ public final class GateFieldBlock extends Block implements EntityBlock {
     @Override
     public BlockEntity newBlockEntity(BlockPos position, BlockState state) {
         return new GateFieldBlockEntity(position, state);
+    }
+
+    @Override
+    protected void entityInside(
+            BlockState state, Level level, BlockPos position, Entity entity) {
+        if (!(level instanceof ServerLevel serverLevel)
+                || !(entity instanceof ServerPlayer player)
+                || player.serverLevel() != serverLevel) {
+            return;
+        }
+        BlockEntity blockEntity = serverLevel.getBlockEntity(position);
+        if (blockEntity instanceof GateFieldBlockEntity field
+                && field.ownerPosition() != null
+                && field.ownerId() != null
+                && field.isOwnedBy(field.ownerPosition(), field.ownerId())) {
+            GateTravelService.INSTANCE.travelToFarRelay(player, field.ownerPosition());
+        }
     }
 
     @Override

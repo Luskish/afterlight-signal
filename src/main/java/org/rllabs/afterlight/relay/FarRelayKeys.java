@@ -21,6 +21,8 @@ public final class FarRelayKeys {
             ResourceKey.create(Registries.NOISE_SETTINGS, FAR_RELAY);
     public static final ResourceKey<LootTable> LOOT_TABLE =
             ResourceKey.create(Registries.LOOT_TABLE, id("chests/far_relay"));
+    public static final ResourceLocation GATE_OPENED = id("gate_opened");
+    public static final ResourceLocation FAR_RELAY_ARRIVAL = id("far_relay_arrival");
 
     private FarRelayKeys() {}
 

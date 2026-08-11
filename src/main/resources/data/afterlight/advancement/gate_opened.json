@@ -1,0 +1,7 @@
+{
+  "criteria": {
+    "server_transition": {
+      "trigger": "minecraft:impossible"
+    }
+  }
+}

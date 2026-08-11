@@ -41,7 +41,14 @@ neoForge {
             client()
         }
         gameTestServer {
-            type = "gameTestServer"
+            if (providers.gradleProperty('afterlightDedicatedAcceptance').orNull == 'true') {
+                server()
+                gameDirectory = layout.buildDirectory.dir('dedicated-acceptance')
+                systemProperty 'afterlight.dedicated.acceptance', 'true'
+                programArgument '--nogui'
+            } else {
+                type = "gameTestServer"
+            }
         }
     }
     unitTest { enable(); testedMod = mods.afterlight }
@@ -210,6 +217,21 @@ tasks.named('processResources') {
 
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
+}
+
+tasks.named('runGameTestServer') {
+    if (providers.gradleProperty('afterlightDedicatedAcceptance').orNull == 'true') {
+        doFirst {
+            def directory = layout.buildDirectory.dir('dedicated-acceptance').get().asFile
+            directory.mkdirs()
+            new File(directory, 'eula.txt').text = 'eula=true\n'
+            new File(directory, 'server.properties').text = '''\
+online-mode=false
+server-port=0
+spawn-protection=0
+'''
+        }
+    }
 }
 
 def configureManifest = { Jar archive ->

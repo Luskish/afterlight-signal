@@ -1,5 +1,6 @@
 package org.rllabs.afterlight.relay;
 
+import java.util.Optional;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
@@ -23,6 +24,24 @@ public final class FarRelayInitializer {
         for (RelaySite site : RelaySite.values()) {
             ensureSite(level, data, site);
         }
+    }
+
+    public static Optional<BlockPos> centralArrival(ServerLevel level) {
+        for (int distance = 0; distance <= SURFACE_SEARCH_RADIUS; distance++) {
+            int above = SURFACE_CENTER_Y + distance;
+            Optional<BlockPos> arrival = centralArrivalAt(level, above);
+            if (arrival.isPresent()) {
+                return arrival;
+            }
+            int below = SURFACE_CENTER_Y - distance;
+            if (distance > 0) {
+                arrival = centralArrivalAt(level, below);
+                if (arrival.isPresent()) {
+                    return arrival;
+                }
+            }
+        }
+        return centralArrivalAt(level, FALLBACK_PLATFORM_Y);
     }
 
     private static void ensureSite(
@@ -78,6 +97,34 @@ public final class FarRelayInitializer {
         return level.getBlockState(floor).isFaceSturdy(level, floor, Direction.UP)
                 && level.getBlockState(floor.above()).canBeReplaced()
                 && level.getBlockState(floor.above(2)).canBeReplaced();
+    }
+
+    private static Optional<BlockPos> centralArrivalAt(ServerLevel level, int floorY) {
+        RelaySite central = RelaySite.CENTRAL;
+        for (int distance = 0; distance <= PLATFORM_RADIUS; distance++) {
+            for (int deltaX = -distance; deltaX <= distance; deltaX++) {
+                for (int deltaZ = -distance; deltaZ <= distance; deltaZ++) {
+                    if (Math.max(Math.abs(deltaX), Math.abs(deltaZ)) != distance) {
+                        continue;
+                    }
+                    BlockPos floor = new BlockPos(
+                            central.x() + deltaX, floorY, central.z() + deltaZ);
+                    BlockPos feet = floor.above();
+                    if (level.getBlockState(floor).is(EchoContent.RELAY_STONE.get())
+                            && level.getBlockState(feet)
+                                    .getCollisionShape(level, feet)
+                                    .isEmpty()
+                            && level.getFluidState(feet).isEmpty()
+                            && level.getBlockState(feet.above())
+                                    .getCollisionShape(level, feet.above())
+                                    .isEmpty()
+                            && level.getFluidState(feet.above()).isEmpty()) {
+                        return Optional.of(feet);
+                    }
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     private static void buildPlatform(ServerLevel level, RelaySite site, int platformY) {

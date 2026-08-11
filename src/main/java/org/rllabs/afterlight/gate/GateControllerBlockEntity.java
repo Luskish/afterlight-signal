@@ -115,13 +115,17 @@ public final class GateControllerBlockEntity extends BlockEntity {
                         serverLevel.getGameTime()),
                 player,
                 progressGateway);
-        if (decision.accepted() && !applyActivation(decision)) {
+        if (decision.accepted() && !applyActivation(decision, player)) {
             return new ActivationDecision(ActivationCode.MALFORMED_STRUCTURE, -1L);
         }
         return decision;
     }
 
     boolean applyActivation(ActivationDecision decision) {
+        return applyActivation(decision, null);
+    }
+
+    boolean applyActivation(ActivationDecision decision, ServerPlayer player) {
         if (!decision.accepted()
                 || state == GateState.OPEN
                 || !(level instanceof ServerLevel serverLevel)) {
@@ -156,6 +160,9 @@ public final class GateControllerBlockEntity extends BlockEntity {
             field.initializeOwnership(worldPosition, fieldId);
         }
         setChanged();
+        if (player != null) {
+            GateTravelService.grantGateOpened(player);
+        }
         return true;
     }
 
