@@ -1,0 +1,12 @@
+.gradle/
+.idea/
+.vscode/
+build/
+config/
+crash-reports/
+logs/
+out/
+run/
+*.iml
+*.jar
+.DS_Store
