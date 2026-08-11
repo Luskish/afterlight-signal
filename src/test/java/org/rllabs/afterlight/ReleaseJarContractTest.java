@@ -426,6 +426,41 @@ class ReleaseJarContractTest {
     }
 
     @Test
+    void dependencyVerificationCoversLinuxNeoFormRuntimeNatives() throws Exception {
+        Document metadata = verificationMetadata();
+        assertLinuxNative(
+                metadata, "lwjgl", "e663738c519a06f6d659882fa8e4e09af7f10e921929ee5cc54a7587f62ed4c9");
+        assertLinuxNative(
+                metadata,
+                "lwjgl-freetype",
+                "9fc63518a27b8ff1ab78196343710ce28e8000ce88f60be851a2d3db5beab8e9");
+        assertLinuxNative(
+                metadata,
+                "lwjgl-glfw",
+                "b8306062b17741f34269088751421f1ac21a597bfbbd0c6c61226301cde744b8");
+        assertLinuxNative(
+                metadata,
+                "lwjgl-jemalloc",
+                "4e4a13d7015d42605bbcf7ef9faead46deac6409e4377a8ed4aea815f14634b3");
+        assertLinuxNative(
+                metadata,
+                "lwjgl-openal",
+                "9030fed928a71eac2fdf4ce1643cc4ec724d8710e3b437bdce750bdc9e982b2a");
+        assertLinuxNative(
+                metadata,
+                "lwjgl-opengl",
+                "d823a92c6a2810b5112da304dcc6abcd4cb102706f74f7e934a223cea2051250");
+        assertLinuxNative(
+                metadata,
+                "lwjgl-stb",
+                "c4489068ddc6dc44b103071943f801a2d076634d4b74db470927f84a308219e1");
+        assertLinuxNative(
+                metadata,
+                "lwjgl-tinyfd",
+                "a076fa05a4d174762eab5852ee72c29d14ab10a5654f27fb00664ef1b52c0c05");
+    }
+
+    @Test
     void platformSpecificNeoFormRuntimeIsExcludedFromCentralLockState() throws Exception {
         String build = Files.readString(ROOT.resolve("build.gradle"));
         String exemption = """
@@ -496,6 +531,17 @@ class ReleaseJarContractTest {
         factory.setExpandEntityReferences(false);
         return factory.newDocumentBuilder()
                 .parse(ROOT.resolve("gradle/verification-metadata.xml").toFile());
+    }
+
+    private static void assertLinuxNative(Document metadata, String module, String sha256) {
+        assertVerificationArtifact(
+                metadata,
+                "org.lwjgl",
+                module,
+                "3.3.3",
+                module + "-3.3.3-natives-linux.jar",
+                sha256,
+                CROSS_REPOSITORY_ORIGIN);
     }
 
     private static void assertVerificationArtifact(
