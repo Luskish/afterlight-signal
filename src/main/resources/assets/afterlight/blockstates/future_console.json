@@ -1,5 +1,12 @@
 {
   "variants": {
-    "": { "model": "afterlight:block/future_console" }
+    "active=false,facing=north": { "model": "afterlight:block/future_console_dormant" },
+    "active=false,facing=east": { "model": "afterlight:block/future_console_dormant", "y": 90 },
+    "active=false,facing=south": { "model": "afterlight:block/future_console_dormant", "y": 180 },
+    "active=false,facing=west": { "model": "afterlight:block/future_console_dormant", "y": 270 },
+    "active=true,facing=north": { "model": "afterlight:block/future_console" },
+    "active=true,facing=east": { "model": "afterlight:block/future_console", "y": 90 },
+    "active=true,facing=south": { "model": "afterlight:block/future_console", "y": 180 },
+    "active=true,facing=west": { "model": "afterlight:block/future_console", "y": 270 }
   }
 }

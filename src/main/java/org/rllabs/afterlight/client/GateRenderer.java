@@ -82,11 +82,6 @@ public final class GateRenderer implements BlockEntityRenderer<GateControllerBlo
     }
 
     @Override
-    public boolean shouldRenderOffScreen(GateControllerBlockEntity controller) {
-        return true;
-    }
-
-    @Override
     public int getViewDistance() {
         return 128;
     }

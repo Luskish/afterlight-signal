@@ -51,10 +51,12 @@ class FarRelayInitializerTest {
     }
 
     @Test
-    void savedDataPersistsSchemaOneAndSitesInEnumOrder() {
+    void savedDataPersistsSchemaOneSitesAndPresentationVersionsInEnumOrder() {
         FarRelaySavedData data = new FarRelaySavedData();
         assertTrue(data.markInitialized(RelaySite.NORTH, 72));
         assertTrue(data.markInitialized(RelaySite.CENTRAL, 64));
+        assertTrue(data.markPresented(RelaySite.NORTH, 2));
+        assertTrue(data.markPresented(RelaySite.CENTRAL, 2));
 
         CompoundTag tag = data.save(new CompoundTag(), RegistryAccess.EMPTY);
 
@@ -66,10 +68,14 @@ class FarRelayInitializerTest {
                         .toList());
         assertEquals(64, tag.getCompound("platform_heights").getInt("CENTRAL"));
         assertEquals(72, tag.getCompound("platform_heights").getInt("NORTH"));
+        assertEquals(2, tag.getCompound("presentation_versions").getInt("CENTRAL"));
+        assertEquals(2, tag.getCompound("presentation_versions").getInt("NORTH"));
         FarRelaySavedData loaded = FarRelaySavedData.load(tag, RegistryAccess.EMPTY);
         assertEquals(Set.of(RelaySite.CENTRAL, RelaySite.NORTH), loaded.initializedSites());
         assertEquals(64, loaded.platformY(RelaySite.CENTRAL).orElseThrow());
         assertEquals(72, loaded.platformY(RelaySite.NORTH).orElseThrow());
+        assertEquals(2, loaded.presentationVersion(RelaySite.CENTRAL));
+        assertEquals(2, loaded.presentationVersion(RelaySite.NORTH));
         assertFalse(loaded.isDirty());
     }
 
@@ -85,6 +91,7 @@ class FarRelayInitializerTest {
 
         assertTrue(loaded.isInitialized(RelaySite.WEST));
         assertTrue(loaded.platformY(RelaySite.WEST).isEmpty());
+        assertEquals(0, loaded.presentationVersion(RelaySite.WEST));
     }
 
     @Test
@@ -95,6 +102,17 @@ class FarRelayInitializerTest {
         assertTrue(data.isDirty());
         data.setDirty(false);
         assertFalse(data.markInitialized(RelaySite.EAST, 70));
+        assertFalse(data.isDirty());
+    }
+
+    @Test
+    void markingCurrentPresentationVersionIsIdempotent() {
+        FarRelaySavedData data = new FarRelaySavedData();
+
+        assertTrue(data.markPresented(RelaySite.EAST, 2));
+        assertTrue(data.isDirty());
+        data.setDirty(false);
+        assertFalse(data.markPresented(RelaySite.EAST, 2));
         assertFalse(data.isDirty());
     }
 

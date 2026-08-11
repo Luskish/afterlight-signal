@@ -4,10 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.rllabs.afterlight.visual.VisualSceneCatalog;
 
 class VisualAcceptanceHarnessTest {
     @Test
@@ -46,17 +45,20 @@ class VisualAcceptanceHarnessTest {
                         "far-relay-return.png"),
                 VisualAcceptanceHarness.expectedArtifacts());
         assertEquals(4_800, VisualAcceptanceHarness.timeoutTicks());
+        assertEquals(12, VisualAcceptanceHarness.stableSceneTicks());
     }
 
     @Test
-    void firstPersonCaptureKeepsTheProductionHandRendererEnabled() throws Exception {
-        Path source = Path.of(System.getProperty("afterlight.source.root", "."))
-                .toAbsolutePath()
-                .normalize()
-                .resolve("src/test/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java");
-        String harness = Files.readString(source);
-
-        assertTrue(harness.contains("minecraft.options.hideGui = false;"));
-        assertFalse(harness.contains("minecraft.options.hideGui = true;"));
+    void everyWorldArtifactHasAnExactSceneContract() {
+        assertEquals(
+                VisualAcceptanceHarness.expectedArtifacts().subList(7, 22),
+                VisualSceneCatalog.worldScenes().stream()
+                        .map(VisualSceneCatalog.WorldScene::artifact)
+                        .toList());
+        VisualSceneCatalog.worldScenes().forEach(scene -> {
+            assertTrue(scene.coordinateTolerance() <= 0.05, scene.artifact());
+            assertFalse(scene.anchorRequirements().isEmpty(), scene.artifact());
+            assertFalse(scene.requiredChunks().isEmpty(), scene.artifact());
+        });
     }
 }

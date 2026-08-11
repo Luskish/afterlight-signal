@@ -1,6 +1,6 @@
 {
   "parent": "afterlight:block/future_console_base",
   "textures": {
-    "panel": "afterlight:block/future_console"
+    "panel": "afterlight:block/future_console_dormant"
   }
 }

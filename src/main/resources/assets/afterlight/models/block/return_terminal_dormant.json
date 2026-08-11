@@ -1,6 +1,6 @@
 {
   "parent": "afterlight:block/return_terminal_base",
   "textures": {
-    "panel": "afterlight:block/return_terminal"
+    "panel": "afterlight:block/return_terminal_dormant"
   }
 }

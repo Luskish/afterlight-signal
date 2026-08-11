@@ -21,21 +21,28 @@ public final class FarRelaySavedData extends SavedData {
     private static final String SCHEMA_TAG = "schema";
     private static final String INITIALIZED_SITES_TAG = "initialized_sites";
     private static final String PLATFORM_HEIGHTS_TAG = "platform_heights";
+    private static final String PRESENTATION_VERSIONS_TAG = "presentation_versions";
     private static final Factory<FarRelaySavedData> FACTORY =
             new Factory<>(FarRelaySavedData::new, FarRelaySavedData::load);
 
     private final EnumSet<RelaySite> initializedSites;
     private final EnumMap<RelaySite, Integer> platformHeights;
+    private final EnumMap<RelaySite, Integer> presentationVersions;
 
     public FarRelaySavedData() {
-        this(EnumSet.noneOf(RelaySite.class), new EnumMap<>(RelaySite.class));
+        this(
+                EnumSet.noneOf(RelaySite.class),
+                new EnumMap<>(RelaySite.class),
+                new EnumMap<>(RelaySite.class));
     }
 
     private FarRelaySavedData(
             EnumSet<RelaySite> initializedSites,
-            EnumMap<RelaySite, Integer> platformHeights) {
+            EnumMap<RelaySite, Integer> platformHeights,
+            EnumMap<RelaySite, Integer> presentationVersions) {
         this.initializedSites = initializedSites;
         this.platformHeights = platformHeights;
+        this.presentationVersions = presentationVersions;
     }
 
     public static FarRelaySavedData get(ServerLevel level) {
@@ -45,9 +52,11 @@ public final class FarRelaySavedData extends SavedData {
     public static FarRelaySavedData load(CompoundTag tag, HolderLookup.Provider registries) {
         EnumSet<RelaySite> sites = EnumSet.noneOf(RelaySite.class);
         EnumMap<RelaySite, Integer> heights = new EnumMap<>(RelaySite.class);
+        EnumMap<RelaySite, Integer> presentations = new EnumMap<>(RelaySite.class);
         if (tag.getInt(SCHEMA_TAG) == SCHEMA) {
             ListTag initialized = tag.getList(INITIALIZED_SITES_TAG, Tag.TAG_STRING);
             CompoundTag storedHeights = tag.getCompound(PLATFORM_HEIGHTS_TAG);
+            CompoundTag storedPresentations = tag.getCompound(PRESENTATION_VERSIONS_TAG);
             for (Tag siteTag : initialized) {
                 try {
                     RelaySite site = RelaySite.valueOf(siteTag.getAsString());
@@ -55,11 +64,14 @@ public final class FarRelaySavedData extends SavedData {
                     if (storedHeights.contains(site.name(), Tag.TAG_INT)) {
                         heights.put(site, storedHeights.getInt(site.name()));
                     }
+                    if (storedPresentations.contains(site.name(), Tag.TAG_INT)) {
+                        presentations.put(site, storedPresentations.getInt(site.name()));
+                    }
                 } catch (IllegalArgumentException ignored) {
                 }
             }
         }
-        return new FarRelaySavedData(sites, heights);
+        return new FarRelaySavedData(sites, heights, presentations);
     }
 
     public boolean isInitialized(RelaySite site) {
@@ -83,6 +95,22 @@ public final class FarRelaySavedData extends SavedData {
         return platformY == null ? OptionalInt.empty() : OptionalInt.of(platformY);
     }
 
+    public int presentationVersion(RelaySite site) {
+        return presentationVersions.getOrDefault(site, 0);
+    }
+
+    public boolean markPresented(RelaySite site, int version) {
+        if (version < 0) {
+            throw new IllegalArgumentException("Presentation version cannot be negative");
+        }
+        Integer previous = presentationVersions.put(site, version);
+        boolean changed = previous == null || previous != version;
+        if (changed) {
+            setDirty();
+        }
+        return changed;
+    }
+
     public Set<RelaySite> initializedSites() {
         return Collections.unmodifiableSet(EnumSet.copyOf(initializedSites));
     }
@@ -104,6 +132,13 @@ public final class FarRelaySavedData extends SavedData {
             }
         }
         tag.put(PLATFORM_HEIGHTS_TAG, heights);
+        CompoundTag presentations = new CompoundTag();
+        for (Map.Entry<RelaySite, Integer> entry : presentationVersions.entrySet()) {
+            if (initializedSites.contains(entry.getKey())) {
+                presentations.putInt(entry.getKey().name(), entry.getValue());
+            }
+        }
+        tag.put(PRESENTATION_VERSIONS_TAG, presentations);
         return tag;
     }
 }

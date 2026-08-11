@@ -3,9 +3,11 @@ package org.rllabs.afterlight.gate;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.decoration.ItemFrame;
@@ -24,6 +26,9 @@ import org.rllabs.afterlight.gate.GateActivationService.ActivationCode;
 import org.rllabs.afterlight.gate.GateActivationService.ActivationDecision;
 import org.rllabs.afterlight.relay.FarRelayInitializer;
 import org.rllabs.afterlight.relay.FarRelayKeys;
+import org.rllabs.afterlight.visual.VisualHarnessIdentity;
+import org.rllabs.afterlight.visual.VisualReadyMarkerPolicy;
+import org.rllabs.afterlight.visual.VisualSceneReadiness.Evaluation;
 
 @EventBusSubscriber(modid = Afterlight.MOD_ID)
 public final class VisualAcceptanceServerHarness {
@@ -38,6 +43,11 @@ public final class VisualAcceptanceServerHarness {
                 || !(event.getEntity() instanceof ServerPlayer player)) {
             return;
         }
+        if (!VisualHarnessIdentity.isExpected(player.getGameProfile())) {
+            player.connection.disconnect(Component.literal(
+                    "AFTERLIGHT visual acceptance rejects unexpected offline identities"));
+            return;
+        }
         player.server.getPlayerList().op(player.getGameProfile());
         player.setGameMode(GameType.CREATIVE);
         if (!prepared) {
@@ -47,8 +57,14 @@ public final class VisualAcceptanceServerHarness {
                 throw new IllegalStateException("Far Relay is unavailable to visual acceptance");
             }
             FarRelayInitializer.ensureAll(farRelay);
-            prepared = true;
+            List<Evaluation> evaluations =
+                    VisualAcceptanceServerSceneValidator.evaluate(player.server);
+            if (!VisualReadyMarkerPolicy.mayWrite(true, evaluations)) {
+                throw new IllegalStateException(
+                        "Visual server scenes are not ready: " + evaluations);
+            }
             writeReadyMarker();
+            prepared = true;
             System.out.println("VISUAL SERVER: READY");
         }
         player.getInventory().add(new ItemStack(EchoContent.ECHO.get()));

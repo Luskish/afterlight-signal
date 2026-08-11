@@ -48,6 +48,13 @@ class GateAssetContractTest {
             "future_console");
     private static final List<String> CONTROLLER_STATES = List.of(
             "gate_controller_open", "gate_controller_fault");
+    private static final List<String> TERMINAL_MODELS = List.of(
+            "return_terminal_base",
+            "return_terminal_dormant",
+            "future_console_base",
+            "future_console_dormant");
+    private static final List<String> TERMINAL_DORMANT_TEXTURES = List.of(
+            "return_terminal_dormant", "future_console_dormant");
     private static final List<String> SOUNDS = List.of(
             "gate_open", "gate_close", "gate_fault");
 
@@ -67,6 +74,10 @@ class GateAssetContractTest {
             required.add(ASSETS.resolve("models/block/" + name + ".json"));
             required.add(ASSETS.resolve("textures/block/" + name + ".png"));
         });
+        TERMINAL_MODELS.forEach(name ->
+                required.add(ASSETS.resolve("models/block/" + name + ".json")));
+        TERMINAL_DORMANT_TEXTURES.forEach(name ->
+                required.add(ASSETS.resolve("textures/block/" + name + ".png")));
         required.add(ASSETS.resolve("textures/block/gate_field.png.mcmeta"));
         required.add(ASSETS.resolve("sounds.json"));
         SOUNDS.forEach(name -> required.add(ASSETS.resolve("sounds/" + name + ".ogg")));
@@ -104,7 +115,7 @@ class GateAssetContractTest {
             assertTrue(blockstate.has("variants"), block);
         }
 
-        for (String modelName : combined(BLOCKS, CONTROLLER_STATES)) {
+        for (String modelName : combined(BLOCKS, CONTROLLER_STATES, TERMINAL_MODELS)) {
             Path modelPath = ASSETS.resolve("models/block/" + modelName + ".json");
             BlockModel model = assertDoesNotThrow(
                     () -> BlockModel.fromString(Files.readString(modelPath)), modelName);
@@ -124,6 +135,40 @@ class GateAssetContractTest {
         for (String item : PLACEABLE_ITEMS) {
             JsonObject model = json(ASSETS.resolve("models/item/" + item + ".json"));
             assertEquals("afterlight:block/" + item, model.get("parent").getAsString());
+        }
+    }
+
+    @Test
+    void terminalsUseDirectionalActiveStateVariantsAndAuthoredGeometry() throws Exception {
+        Set<String> expectedVariants = Set.of(
+                "active=false,facing=north",
+                "active=false,facing=east",
+                "active=false,facing=south",
+                "active=false,facing=west",
+                "active=true,facing=north",
+                "active=true,facing=east",
+                "active=true,facing=south",
+                "active=true,facing=west");
+
+        for (String terminal : List.of("return_terminal", "future_console")) {
+            JsonObject variants = json(ASSETS.resolve("blockstates/" + terminal + ".json"))
+                    .getAsJsonObject("variants");
+            assertEquals(expectedVariants, variants.keySet(), terminal + " variants");
+
+            JsonObject active = json(ASSETS.resolve("models/block/" + terminal + ".json"));
+            JsonObject dormant = json(ASSETS.resolve(
+                    "models/block/" + terminal + "_dormant.json"));
+            JsonObject base = json(ASSETS.resolve("models/block/" + terminal + "_base.json"));
+            assertEquals("afterlight:block/" + terminal + "_base", active.get("parent").getAsString());
+            assertEquals("afterlight:block/" + terminal + "_base", dormant.get("parent").getAsString());
+            assertTrue(base.getAsJsonArray("elements").size() >= 4, terminal + " geometry");
+            assertFalse(base.toString().contains("minecraft:block/cube_all"), terminal);
+            assertEquals(
+                    "afterlight:block/" + terminal,
+                    active.getAsJsonObject("textures").get("panel").getAsString());
+            assertEquals(
+                    "afterlight:block/" + terminal + "_dormant",
+                    dormant.getAsJsonObject("textures").get("panel").getAsString());
         }
     }
 
@@ -158,6 +203,12 @@ class GateAssetContractTest {
         assertTrue(countPixels(textures.get("gate_controller_open"), GateAssetContractTest::isCyan) >= 12);
         assertTrue(countPixels(textures.get("gate_field"), GateAssetContractTest::isCyan) >= 48);
         assertTrue(countPixels(textures.get("gate_controller_fault"), GateAssetContractTest::isFaultRed) >= 12);
+        assertTrue(countPixels(textures.get("return_terminal"), GateAssetContractTest::isCyan) >= 12);
+        assertTrue(countPixels(textures.get("future_console"), GateAssetContractTest::isAmber) >= 12);
+        assertEquals(
+                0L,
+                countPixels(textures.get("future_console"), GateAssetContractTest::isVividBlue),
+                "future_console");
         textures.forEach((name, image) -> {
             if (!name.equals("gate_controller_fault")) {
                 assertEquals(0L, countPixels(image, GateAssetContractTest::isFaultRed), name);
@@ -193,9 +244,12 @@ class GateAssetContractTest {
         return JsonParser.parseString(Files.readString(path)).getAsJsonObject();
     }
 
-    private static List<String> combined(List<String> first, List<String> second) {
-        List<String> values = new ArrayList<>(first);
-        values.addAll(second);
+    @SafeVarargs
+    private static List<String> combined(List<String>... groups) {
+        List<String> values = new ArrayList<>();
+        for (List<String> group : groups) {
+            values.addAll(group);
+        }
         return List.copyOf(values);
     }
 
@@ -226,6 +280,10 @@ class GateAssetContractTest {
 
     private static boolean isFaultRed(int alpha, int red, int green, int blue) {
         return alpha > 80 && red > 110 && red > green * 1.8 && red > blue * 1.8;
+    }
+
+    private static boolean isVividBlue(int alpha, int red, int green, int blue) {
+        return alpha > 80 && blue > 110 && blue > red * 1.8 && blue > green * 1.8;
     }
 
     @FunctionalInterface

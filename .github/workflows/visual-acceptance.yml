@@ -2,41 +2,75 @@ name: visual acceptance
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - 'src/**'
+      - 'build.gradle'
+      - 'settings.gradle'
+      - 'gradle.properties'
+      - 'gradle/**'
+      - 'tools/run-visual-acceptance-linux.sh'
+      - 'tools/visual-acceptance-lib.sh'
+      - '.github/workflows/visual-acceptance.yml'
 
 permissions:
   contents: read
 
 concurrency:
-  group: visual-acceptance-${{ github.ref }}
+  group: visual-acceptance-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   capture:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - name: Checkout source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
           clean: true
           fetch-depth: 1
           persist-credentials: false
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961
         with:
           distribution: temurin
           java-version: '21.0.12+8.0.LTS'
           architecture: x64
-      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
         with:
           gradle-version: '9.2.1'
-      - name: Install Xvfb and Mesa
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y xvfb xauth libgl1-mesa-dri libglx-mesa0 mesa-utils
+      - name: Install pinned Xvfb and Mesa snapshot
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          snapshot='https://snapshot.ubuntu.com/ubuntu/20250115T000000Z/'
+          sudo sed -Ei "s#https?://([a-z0-9.-]+\\.)?(archive\\.ubuntu\\.com|security\\.ubuntu\\.com)/ubuntu/?#${snapshot}#g" /etc/apt/sources.list.d/ubuntu.sources
+          sudo apt-get -o Acquire::Check-Valid-Until=false update
+          sudo apt-get -o Acquire::Check-Valid-Until=false install \
+            --allow-downgrades \
+            --no-install-recommends \
+            -y \
+            xvfb=2:21.1.12-1ubuntu1.1 \
+            xauth=1:1.1.2-1build1 \
+            libgl1-mesa-dri=24.0.9-0ubuntu0.3 \
+            libglx-mesa0=24.0.9-0ubuntu0.3 \
+            mesa-utils=9.0.0-2
       - name: Render acceptance artifacts
         run: ./tools/run-visual-acceptance-linux.sh
       - name: Upload rendered PNG inventory
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: afterlight-visual-acceptance-${{ github.sha }}
           path: build/visual-artifacts

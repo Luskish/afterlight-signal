@@ -50,6 +50,12 @@ class GatePresentationContractTest {
     }
 
     @Test
+    void expandedBoundsDoNotForceTheGateRendererOffScreen() {
+        assertTrue(java.util.Arrays.stream(GateRenderer.class.getDeclaredMethods())
+                .noneMatch(method -> method.getName().equals("shouldRenderOffScreen")));
+    }
+
+    @Test
     void gateRendererSamplesTheAnimatedFieldFromTheTickedBlockAtlas() throws Exception {
         Path source = Path.of(System.getProperty("afterlight.source.root", "."))
                 .toAbsolutePath()

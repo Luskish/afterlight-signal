@@ -1,5 +1,7 @@
 package org.rllabs.afterlight.relay;
 
+import net.minecraft.core.Direction;
+
 public enum RelaySite {
     CENTRAL(0, 0),
     EAST(256, 0),
@@ -21,5 +23,15 @@ public enum RelaySite {
 
     public int z() {
         return z;
+    }
+
+    public Direction directionTowardCenter() {
+        return switch (this) {
+            case EAST -> Direction.WEST;
+            case WEST -> Direction.EAST;
+            case SOUTH -> Direction.NORTH;
+            case NORTH -> Direction.SOUTH;
+            case CENTRAL -> Direction.SOUTH;
+        };
     }
 }

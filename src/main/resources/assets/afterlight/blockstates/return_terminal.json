@@ -1,5 +1,12 @@
 {
   "variants": {
-    "": { "model": "afterlight:block/return_terminal" }
+    "active=false,facing=north": { "model": "afterlight:block/return_terminal_dormant" },
+    "active=false,facing=east": { "model": "afterlight:block/return_terminal_dormant", "y": 90 },
+    "active=false,facing=south": { "model": "afterlight:block/return_terminal_dormant", "y": 180 },
+    "active=false,facing=west": { "model": "afterlight:block/return_terminal_dormant", "y": 270 },
+    "active=true,facing=north": { "model": "afterlight:block/return_terminal" },
+    "active=true,facing=east": { "model": "afterlight:block/return_terminal", "y": 90 },
+    "active=true,facing=south": { "model": "afterlight:block/return_terminal", "y": 180 },
+    "active=true,facing=west": { "model": "afterlight:block/return_terminal", "y": 270 }
   }
 }

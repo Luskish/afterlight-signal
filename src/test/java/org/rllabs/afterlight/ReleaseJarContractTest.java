@@ -166,12 +166,23 @@ class ReleaseJarContractTest {
             "org/rllabs/afterlight/network/OpenEchoRequest.class",
             "org/rllabs/afterlight/network/OpenEchoScreen.class",
             "org/rllabs/afterlight/relay/",
+            "org/rllabs/afterlight/relay/FarRelayInitializer$1.class",
             "org/rllabs/afterlight/relay/FarRelayInitializer.class",
             "org/rllabs/afterlight/relay/FarRelayKeys.class",
             "org/rllabs/afterlight/relay/FarRelaySavedData.class",
+            "org/rllabs/afterlight/relay/FarRelayStructurePlan$Anchor.class",
+            "org/rllabs/afterlight/relay/FarRelayStructurePlan$Builder.class",
+            "org/rllabs/afterlight/relay/FarRelayStructurePlan$Material.class",
+            "org/rllabs/afterlight/relay/FarRelayStructurePlan$Placement.class",
+            "org/rllabs/afterlight/relay/FarRelayStructurePlan$Plan.class",
+            "org/rllabs/afterlight/relay/FarRelayStructurePlan$Position.class",
+            "org/rllabs/afterlight/relay/FarRelayStructurePlan.class",
+            "org/rllabs/afterlight/relay/FutureConsoleBlock$1.class",
             "org/rllabs/afterlight/relay/FutureConsoleBlock.class",
             "org/rllabs/afterlight/relay/RelaySite.class",
+            "org/rllabs/afterlight/relay/ReturnTerminalBlock$1.class",
             "org/rllabs/afterlight/relay/ReturnTerminalBlock.class",
+            "org/rllabs/afterlight/relay/SignalTerminalBlock.class",
             "org/rllabs/afterlight/route/",
             "org/rllabs/afterlight/route/EchoQuestSnapshot$RewardSnapshot.class",
             "org/rllabs/afterlight/route/EchoQuestSnapshot$TaskSnapshot.class",
@@ -204,6 +215,8 @@ class ReleaseJarContractTest {
             "assets/afterlight/models/",
             "assets/afterlight/models/block/",
             "assets/afterlight/models/block/future_console.json",
+            "assets/afterlight/models/block/future_console_base.json",
+            "assets/afterlight/models/block/future_console_dormant.json",
             "assets/afterlight/models/block/gate_controller.json",
             "assets/afterlight/models/block/gate_controller_fault.json",
             "assets/afterlight/models/block/gate_controller_open.json",
@@ -211,6 +224,8 @@ class ReleaseJarContractTest {
             "assets/afterlight/models/block/gate_frame.json",
             "assets/afterlight/models/block/relay_stone.json",
             "assets/afterlight/models/block/return_terminal.json",
+            "assets/afterlight/models/block/return_terminal_base.json",
+            "assets/afterlight/models/block/return_terminal_dormant.json",
             "assets/afterlight/models/block/signal_glass.json",
             "assets/afterlight/models/item/",
             "assets/afterlight/models/item/echo.json",
@@ -227,6 +242,7 @@ class ReleaseJarContractTest {
             "assets/afterlight/textures/",
             "assets/afterlight/textures/block/",
             "assets/afterlight/textures/block/future_console.png",
+            "assets/afterlight/textures/block/future_console_dormant.png",
             "assets/afterlight/textures/block/gate_controller.png",
             "assets/afterlight/textures/block/gate_controller_fault.png",
             "assets/afterlight/textures/block/gate_controller_open.png",
@@ -235,6 +251,7 @@ class ReleaseJarContractTest {
             "assets/afterlight/textures/block/gate_frame.png",
             "assets/afterlight/textures/block/relay_stone.png",
             "assets/afterlight/textures/block/return_terminal.png",
+            "assets/afterlight/textures/block/return_terminal_dormant.png",
             "assets/afterlight/textures/block/signal_glass.png",
             "assets/afterlight/textures/gui/",
             "assets/afterlight/textures/gui/echo_panel.png",
@@ -287,6 +304,12 @@ class ReleaseJarContractTest {
                 "src/test/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java")));
         assertTrue(Files.isRegularFile(ROOT.resolve(
                 "src/test/java/org/rllabs/afterlight/gate/VisualAcceptanceServerHarness.java")));
+        assertTrue(Files.isRegularFile(ROOT.resolve(
+                "src/test/java/org/rllabs/afterlight/client/VisualSceneProbe.java")));
+        assertTrue(Files.isDirectory(ROOT.resolve(
+                "src/test/java/org/rllabs/afterlight/visual")));
+        assertTrue(Files.isRegularFile(ROOT.resolve(
+                "src/test/resources/visual-acceptance/server.properties")));
         assertFalse(Files.exists(ROOT.resolve(
                 "src/main/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java")));
         assertFalse(Files.exists(ROOT.resolve(
@@ -298,10 +321,16 @@ class ReleaseJarContractTest {
                     .collect(java.util.stream.Collectors.toSet());
             assertTrue(entries.contains("org/rllabs/afterlight/client/FarRelayEffects.class"));
             assertTrue(entries.contains("org/rllabs/afterlight/client/GateRenderer.class"));
+            assertTrue(entries.contains("org/rllabs/afterlight/relay/FarRelayStructurePlan.class"));
+            assertTrue(entries.contains("org/rllabs/afterlight/relay/SignalTerminalBlock.class"));
             assertTrue(entries.contains("assets/afterlight/textures/block/gate_field.png"));
+            assertTrue(entries.contains("assets/afterlight/textures/block/return_terminal_dormant.png"));
             assertTrue(entries.contains("assets/afterlight/sounds/gate_open.ogg"));
             assertTrue(entries.contains("data/afterlight/loot_table/blocks/gate_controller.json"));
             assertFalse(entries.stream().anyMatch(name -> name.contains("VisualAcceptance")));
+            assertFalse(entries.stream().anyMatch(name -> name.startsWith(
+                    "org/rllabs/afterlight/visual/")));
+            assertFalse(entries.contains("visual-acceptance/server.properties"));
         }
     }
 

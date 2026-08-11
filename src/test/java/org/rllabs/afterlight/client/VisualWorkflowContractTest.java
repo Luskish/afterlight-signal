@@ -4,11 +4,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.snakeyaml.engine.v2.api.Load;
+import org.snakeyaml.engine.v2.api.LoadSettings;
 
 class VisualWorkflowContractTest {
     private static final Path ROOT = Path.of(System.getProperty("afterlight.source.root", "."))
@@ -16,26 +25,75 @@ class VisualWorkflowContractTest {
             .normalize();
 
     @Test
-    void isolatedWorkflowRunsTheExplicitLinuxHarnessAndUploadsOnlyReviewedArtifacts()
-            throws Exception {
-        Path workflowPath = ROOT.resolve(".github/workflows/visual-acceptance.yml");
-        assertTrue(Files.isRegularFile(workflowPath), "missing isolated visual workflow");
-        String workflow = Files.readString(workflowPath);
+    void parsedWorkflowHasSafeManualAndFilteredPremergeTriggers() throws Exception {
+        Map<String, Object> workflow = workflow();
+        Map<String, Object> triggers = map(workflow.get("on"));
 
-        assertTrue(workflow.contains("workflow_dispatch:"));
-        assertFalse(workflow.contains("\n  push:"));
-        assertFalse(workflow.contains("\n  pull_request:"));
-        assertTrue(workflow.contains("runs-on: ubuntu-24.04"));
-        assertTrue(workflow.contains("./tools/run-visual-acceptance-linux.sh"));
-        assertTrue(workflow.contains("path: build/visual-artifacts"));
-        assertTrue(workflow.contains("if-no-files-found: error"));
-        assertTrue(workflow.contains("retention-days: 14"));
+        assertEquals(Set.of("workflow_dispatch", "pull_request"), triggers.keySet());
+        Map<String, Object> pullRequest = map(triggers.get("pull_request"));
+        assertEquals(
+                List.of("opened", "synchronize", "reopened", "ready_for_review"),
+                list(pullRequest.get("types")));
+        assertTrue(list(pullRequest.get("paths")).containsAll(List.of(
+                "src/**",
+                "build.gradle",
+                "settings.gradle",
+                "gradle.properties",
+                "gradle/**",
+                "tools/run-visual-acceptance-linux.sh",
+                "tools/visual-acceptance-lib.sh",
+                ".github/workflows/visual-acceptance.yml")));
+        assertFalse(triggers.containsKey("pull_request_target"));
+        assertFalse(triggers.containsKey("push"));
     }
 
     @Test
-    void linuxRunnerUsesXvfbMesaGeneratedLaunchersAndLoudArtifactChecks() throws Exception {
-        Path runnerPath = ROOT.resolve("tools/run-visual-acceptance-linux.sh");
-        assertTrue(Files.isRegularFile(runnerPath), "missing Linux visual runner");
+    void parsedWorkflowPinsActionsAndUbuntuPackageSnapshot() throws Exception {
+        Map<String, Object> workflow = workflow();
+        Map<String, Object> capture = map(map(workflow.get("jobs")).get("capture"));
+        assertEquals("ubuntu-24.04", capture.get("runs-on"));
+        assertEquals(Map.of("contents", "read"), map(workflow.get("permissions")));
+
+        List<Map<String, Object>> steps = maps(capture.get("steps"));
+        steps.stream()
+                .map(step -> step.get("uses"))
+                .filter(String.class::isInstance)
+                .map(String.class::cast)
+                .forEach(action -> assertTrue(
+                        action.matches("[^@]+@[0-9a-f]{40}"), "unpinned action: " + action));
+
+        String install = runStep(steps, "Install pinned Xvfb and Mesa snapshot");
+        assertTrue(install.contains("https://snapshot.ubuntu.com/ubuntu/20250115T000000Z/"));
+        assertTrue(install.contains("mesa-utils"));
+        assertTrue(install.contains("libgl1-mesa-dri"));
+        assertTrue(install.contains("xvfb"));
+        assertTrue(install.contains("--allow-downgrades"));
+        assertTrue(install.contains("xvfb=2:21.1.12-1ubuntu1.1"));
+        assertTrue(install.contains("xauth=1:1.1.2-1build1"));
+        assertTrue(install.contains("libgl1-mesa-dri=24.0.9-0ubuntu0.3"));
+        assertTrue(install.contains("libglx-mesa0=24.0.9-0ubuntu0.3"));
+        assertTrue(install.contains("mesa-utils=9.0.0-2"));
+        assertEquals(
+                "./tools/run-visual-acceptance-linux.sh",
+                runStep(steps, "Render acceptance artifacts"));
+
+        Map<String, Object> upload = steps.stream()
+                .filter(step -> "Upload rendered PNG inventory".equals(step.get("name")))
+                .findFirst()
+                .map(step -> map(step.get("with")))
+                .orElseThrow();
+        assertEquals("build/visual-artifacts", upload.get("path"));
+        assertEquals("error", upload.get("if-no-files-found"));
+        assertEquals(14, upload.get("retention-days"));
+    }
+
+    @Test
+    void visualShellScriptsParseAndRendererHelperAcceptsOnlySoftwareMesa(@TempDir Path temp)
+            throws Exception {
+        Path runner = ROOT.resolve("tools/run-visual-acceptance-linux.sh");
+        Path helper = ROOT.resolve("tools/visual-acceptance-lib.sh");
+        assertEquals(0, command("bash", "-n", runner.toString()).exitCode());
+        assertEquals(0, command("bash", "-n", helper.toString()).exitCode());
         assertEquals(
                 Set.of(
                         PosixFilePermission.OWNER_READ,
@@ -45,32 +103,129 @@ class VisualWorkflowContractTest {
                         PosixFilePermission.GROUP_EXECUTE,
                         PosixFilePermission.OTHERS_READ,
                         PosixFilePermission.OTHERS_EXECUTE),
-                Files.getPosixFilePermissions(runnerPath));
+                Files.getPosixFilePermissions(runner));
 
-        String runner = Files.readString(runnerPath);
-        assertTrue(runner.contains("-PafterlightLockContext=linux"));
-        assertTrue(runner.contains("--no-daemon"));
-        assertTrue(runner.contains("createVisualServerLaunchScript"));
-        assertTrue(runner.contains("createVisualClientLaunchScript"));
-        assertTrue(runner.contains("build/moddev/runVisualServer.sh"));
-        assertTrue(runner.contains("grep -Fq 'Done ('"));
-        assertTrue(runner.contains("xvfb-run"));
-        assertTrue(runner.contains("build/moddev/runVisualClient.sh"));
-        assertTrue(runner.contains("LIBGL_ALWAYS_SOFTWARE=1"));
-        assertTrue(runner.contains("MESA_LOADER_DRIVER_OVERRIDE=llvmpipe"));
-        assertTrue(runner.contains("visual-acceptance-success.txt"));
-        assertTrue(runner.contains("test -s \"$server_marker\""));
-        assertTrue(runner.contains("manifest.json"));
-        assertTrue(runner.contains("expected_count=22"));
-        assertTrue(runner.contains("timeout"));
+        Path glxinfo = temp.resolve("glxinfo.txt");
+        Files.writeString(glxinfo, """
+                OpenGL vendor string: Mesa/X.org
+                OpenGL renderer string: llvmpipe (LLVM 19.1.7, 256 bits)
+                OpenGL core profile version string: 4.5 (Core Profile) Mesa 24.3.4
+                """);
+        String source = shellQuote(helper.toString());
+        String fixture = shellQuote(glxinfo.toString());
+        CommandResult approved = command(
+                "bash",
+                "-c",
+                "source " + source + "; visual_assert_approved_glxinfo " + fixture);
+        assertEquals(0, approved.exitCode(), approved.output());
+        assertEquals(
+                "llvmpipe (LLVM 19.1.7, 256 bits)",
+                command(
+                                "bash",
+                                "-c",
+                                "source " + source + "; visual_glxinfo_field "
+                                        + fixture
+                                        + " 'OpenGL renderer string'")
+                        .output()
+                        .trim());
+
+        Files.writeString(glxinfo, """
+                OpenGL vendor string: NVIDIA Corporation
+                OpenGL renderer string: NVIDIA GeForce RTX
+                OpenGL core profile version string: 4.6
+                """);
+        assertTrue(command(
+                        "bash",
+                        "-c",
+                        "source " + source + "; visual_assert_approved_glxinfo " + fixture)
+                .exitCode()
+                != 0);
+
+        Path screenshots = Files.createDirectories(temp.resolve("screenshots"));
+        Files.writeString(screenshots.resolve("first.png"), "first");
+        Files.writeString(screenshots.resolve("second.png"), "second");
+        String artifactRoot = shellQuote(temp.toString());
+        CommandResult exactInventory = command(
+                "bash",
+                "-c",
+                "source "
+                        + source
+                        + "; visual_assert_png_inventory "
+                        + artifactRoot
+                        + " first.png second.png");
+        assertEquals(0, exactInventory.exitCode(), exactInventory.output());
+        Files.writeString(screenshots.resolve("unexpected.png"), "unexpected");
+        assertTrue(command(
+                        "bash",
+                        "-c",
+                        "source "
+                                + source
+                                + "; visual_assert_png_inventory "
+                                + artifactRoot
+                                + " first.png second.png")
+                .exitCode()
+                != 0);
     }
 
     @Test
-    void visualServerSceneUsesADeterministicFlatOverworld() throws Exception {
-        String build = Files.readString(ROOT.resolve("build.gradle"));
+    void parsedVisualServerPropertiesAreDeterministicAndLoopbackOnly() throws Exception {
+        Properties properties = new Properties();
+        try (InputStream input = Files.newInputStream(
+                ROOT.resolve("src/test/resources/visual-acceptance/server.properties"))) {
+            properties.load(input);
+        }
 
-        assertTrue(build.contains("generate-structures=false"));
-        assertTrue(build.contains("level-seed=afterlight-visual-acceptance"));
-        assertTrue(build.contains("level-type=minecraft:flat"));
+        assertEquals("127.0.0.1", properties.getProperty("server-ip"));
+        assertEquals("false", properties.getProperty("online-mode"));
+        assertEquals("25567", properties.getProperty("server-port"));
+        assertEquals("afterlight-visual-acceptance", properties.getProperty("level-seed"));
+        assertEquals("minecraft:flat", properties.getProperty("level-type"));
+        assertEquals("false", properties.getProperty("generate-structures"));
     }
+
+    private static Map<String, Object> workflow() throws Exception {
+        Path path = ROOT.resolve(".github/workflows/visual-acceptance.yml");
+        assertTrue(Files.isRegularFile(path), "missing isolated visual workflow");
+        Load load = new Load(LoadSettings.builder().setLabel(path.toString()).build());
+        try (InputStream input = Files.newInputStream(path)) {
+            return map(load.loadFromInputStream(input));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> map(Object value) {
+        return (Map<String, Object>) value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Object> list(Object value) {
+        return (List<Object>) value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> maps(Object value) {
+        return (List<Map<String, Object>>) value;
+    }
+
+    private static String runStep(List<Map<String, Object>> steps, String name) {
+        return steps.stream()
+                .filter(step -> name.equals(step.get("name")))
+                .map(step -> (String) step.get("run"))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    private static CommandResult command(String... command) throws Exception {
+        Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        process.getInputStream().transferTo(output);
+        int exitCode = process.waitFor();
+        return new CommandResult(exitCode, output.toString(StandardCharsets.UTF_8));
+    }
+
+    private static String shellQuote(String value) {
+        return "'" + value.replace("'", "'\\''") + "'";
+    }
+
+    private record CommandResult(int exitCode, String output) {}
 }

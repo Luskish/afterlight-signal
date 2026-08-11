@@ -27,7 +27,7 @@ import org.rllabs.afterlight.EchoContent;
 public final class FarRelayGameTests {
     private static final String TEMPLATE = "bastion/blocks/air";
     private static final int PLATFORM_RADIUS = 5;
-    private static final int CONSTRUCTION_RADIUS = 7;
+    private static final int CONSTRUCTION_RADIUS = 11;
 
     private FarRelayGameTests() {}
 
@@ -87,6 +87,10 @@ public final class FarRelayGameTests {
                 data.initializedSites().size(), RelaySite.values().length, "initialized site count");
         for (RelaySite site : RelaySite.values()) {
             helper.assertTrue(data.isInitialized(site), "unmarked relay site: " + site);
+            helper.assertValueEqual(
+                    data.presentationVersion(site),
+                    FarRelayStructurePlan.PRESENTATION_VERSION,
+                    site + " presentation version");
             assertCompleteSite(helper, relay, site, expectedFloors.get(site));
         }
         helper.assertValueEqual(
@@ -116,9 +120,12 @@ public final class FarRelayGameTests {
         restorePreviousTestObstruction(relay);
         FarRelayInitializer.ensureAll(relay);
         Map<RelaySite, Integer> floors = currentPlatformFloors(relay);
+        FarRelaySavedData data = FarRelaySavedData.get(relay);
 
         for (RelaySite site : RelaySite.values()) {
             int floorY = floors.get(site);
+            reduceToLegacyPresentation(relay, site, floorY);
+            data.markPresented(site, 0);
             relay.setBlock(
                     new BlockPos(site.x(), floorY, site.z()),
                     Blocks.AIR.defaultBlockState(),
@@ -131,11 +138,11 @@ public final class FarRelayGameTests {
         int centralFloor = floors.get(RelaySite.CENTRAL);
         relay.setBlock(
                 new BlockPos(RelaySite.CENTRAL.x() + 3, centralFloor + 1, RelaySite.CENTRAL.z()),
-                Blocks.AIR.defaultBlockState(),
+                EchoContent.RETURN_TERMINAL.get().defaultBlockState(),
                 Block.UPDATE_ALL);
         relay.setBlock(
                 new BlockPos(RelaySite.CENTRAL.x() - 3, centralFloor + 1, RelaySite.CENTRAL.z()),
-                Blocks.AIR.defaultBlockState(),
+                EchoContent.FUTURE_CONSOLE.get().defaultBlockState(),
                 Block.UPDATE_ALL);
 
         FarRelayInitializer.ensureAll(relay);
@@ -315,6 +322,24 @@ public final class FarRelayGameTests {
 
     private static void assertCompleteSite(
             GameTestHelper helper, ServerLevel level, RelaySite site, int floorY) {
+        FarRelayStructurePlan.Plan plan = FarRelayStructurePlan.forSite(site);
+        for (FarRelayStructurePlan.Placement placement : plan.placements()) {
+            BlockPos position = FarRelayStructurePlan.worldPosition(site, floorY, placement);
+            BlockState state = level.getBlockState(position);
+            helper.assertValueEqual(
+                    state.getBlock(), expectedBlock(placement.material()), site + " structure " + position);
+            if (placement.material() == FarRelayStructurePlan.Material.RETURN_TERMINAL
+                    || placement.material() == FarRelayStructurePlan.Material.FUTURE_CONSOLE) {
+                helper.assertValueEqual(
+                        state.getValue(SignalTerminalBlock.FACING),
+                        placement.facing(),
+                        site + " terminal facing " + position);
+                helper.assertValueEqual(
+                        state.getValue(SignalTerminalBlock.ACTIVE),
+                        placement.active(),
+                        site + " terminal active state " + position);
+            }
+        }
         for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
             for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
                 BlockPos floor = new BlockPos(site.x() + deltaX, floorY, site.z() + deltaZ);
@@ -350,6 +375,20 @@ public final class FarRelayGameTests {
         }
     }
 
+    private static Block expectedBlock(FarRelayStructurePlan.Material material) {
+        return switch (material) {
+            case RELAY_STONE -> EchoContent.RELAY_STONE.get();
+            case GATE_FRAME -> EchoContent.GATE_FRAME.get();
+            case SIGNAL_GLASS -> EchoContent.SIGNAL_GLASS.get();
+            case RETURN_TERMINAL -> EchoContent.RETURN_TERMINAL.get();
+            case FUTURE_CONSOLE -> EchoContent.FUTURE_CONSOLE.get();
+            case LOOT_CHEST -> Blocks.CHEST;
+            case POLISHED_BLACKSTONE_BRICKS -> Blocks.POLISHED_BLACKSTONE_BRICKS;
+            case POLISHED_BLACKSTONE_BRICK_WALL -> Blocks.POLISHED_BLACKSTONE_BRICK_WALL;
+            case SOUL_LANTERN -> Blocks.SOUL_LANTERN;
+        };
+    }
+
     private static int expectedPlatformY(ServerLevel level, int x, int z) {
         for (int distance = 0; distance <= 32; distance++) {
             int above = 64 + distance;
@@ -374,12 +413,35 @@ public final class FarRelayGameTests {
 
     private static void restorePreviousTestObstruction(ServerLevel level) {
         for (int distance = 0; distance <= 32; distance++) {
-            restoreDiamondCenter(level, 64 + distance);
+            restoreDiamondFixtures(level, 64 + distance);
             if (distance > 0) {
-                restoreDiamondCenter(level, 64 - distance);
+                restoreDiamondFixtures(level, 64 - distance);
             }
         }
-        restoreDiamondCenter(level, 72);
+        restoreDiamondFixtures(level, 72);
+    }
+
+    private static void reduceToLegacyPresentation(
+            ServerLevel level, RelaySite site, int floorY) {
+        for (FarRelayStructurePlan.Placement placement :
+                FarRelayStructurePlan.forSite(site).placements()) {
+            boolean legacyFloor = placement.y() == 0
+                    && Math.abs(placement.x()) <= PLATFORM_RADIUS
+                    && Math.abs(placement.z()) <= PLATFORM_RADIUS;
+            boolean legacyChest = placement.x() == 0
+                    && placement.y() == 1
+                    && placement.z() == 3;
+            boolean legacyCentralTerminal = site == RelaySite.CENTRAL
+                    && placement.y() == 1
+                    && placement.z() == 0
+                    && Math.abs(placement.x()) == 3;
+            if (!legacyFloor && !legacyChest && !legacyCentralTerminal) {
+                level.setBlock(
+                        FarRelayStructurePlan.worldPosition(site, floorY, placement),
+                        Blocks.AIR.defaultBlockState(),
+                        Block.UPDATE_ALL);
+            }
+        }
     }
 
     private static void clearSiteSearchVolume(ServerLevel level, RelaySite site) {
@@ -395,13 +457,18 @@ public final class FarRelayGameTests {
         }
     }
 
-    private static void restoreDiamondCenter(ServerLevel level, int floorY) {
-        BlockPos center = new BlockPos(RelaySite.CENTRAL.x(), floorY, RelaySite.CENTRAL.z());
-        if (level.getBlockState(center).is(Blocks.DIAMOND_BLOCK)) {
-            level.setBlock(
-                    center,
-                    EchoContent.RELAY_STONE.get().defaultBlockState(),
-                    Block.UPDATE_ALL);
+    private static void restoreDiamondFixtures(ServerLevel level, int floorY) {
+        for (int deltaX : new int[] {0, 8, CONSTRUCTION_RADIUS + 1}) {
+            BlockPos position = new BlockPos(
+                    RelaySite.CENTRAL.x() + deltaX,
+                    floorY,
+                    RelaySite.CENTRAL.z());
+            if (level.getBlockState(position).is(Blocks.DIAMOND_BLOCK)) {
+                level.setBlock(
+                        position,
+                        EchoContent.RELAY_STONE.get().defaultBlockState(),
+                        Block.UPDATE_ALL);
+            }
         }
     }
 
@@ -424,9 +491,10 @@ public final class FarRelayGameTests {
         Map<BlockPos, String> snapshot = new LinkedHashMap<>();
         for (RelaySite site : RelaySite.values()) {
             int floorY = floors.get(site);
+            int maximumY = FarRelayStructurePlan.forSite(site).maximumY();
             for (int deltaX = -CONSTRUCTION_RADIUS; deltaX <= CONSTRUCTION_RADIUS; deltaX++) {
                 for (int deltaZ = -CONSTRUCTION_RADIUS; deltaZ <= CONSTRUCTION_RADIUS; deltaZ++) {
-                    for (int deltaY = -1; deltaY <= 3; deltaY++) {
+                    for (int deltaY = -1; deltaY <= maximumY; deltaY++) {
                         BlockPos position = new BlockPos(
                                 site.x() + deltaX, floorY + deltaY, site.z() + deltaZ);
                         BlockState state = level.getBlockState(position);
