@@ -80,12 +80,17 @@ def releaseBuild = providers.gradleProperty('afterlightRelease').map { value ->
     }
     true
 }.orElse(false)
+def releaseStagingDirectory = layout.projectDirectory.dir('.gradle/release-source')
+def provenanceSourceTreeSha256 = releaseBuild.get()
+        ? committedSourceTreeSha256
+        : sourceTreeSha256
 
-def verifyReleaseSource = tasks.register('verifyReleaseSource', Exec) {
+def stageReleaseSource = tasks.register('stageReleaseSource', Exec) {
     commandLine policyJava.absolutePath,
             releasePolicy.absolutePath,
-            'verify-release',
-            layout.projectDirectory.asFile.absolutePath
+            'stage-release',
+            layout.projectDirectory.asFile.absolutePath,
+            releaseStagingDirectory.asFile.absolutePath
     mustRunAfter tasks.named('clean')
 }
 
@@ -96,23 +101,49 @@ def verifyWorkingSourceTypes = tasks.register('verifyWorkingSourceTypes', Exec) 
             layout.projectDirectory.asFile.absolutePath
 }
 
-tasks.named('compileJava') {
-    dependsOn verifyWorkingSourceTypes
+if (releaseBuild.get()) {
+    sourceSets.main.java.setSrcDirs([
+            releaseStagingDirectory.dir('src/main/java').asFile
+    ])
+    sourceSets.main.resources.setSrcDirs([
+            releaseStagingDirectory.dir('src/main/resources').asFile
+    ])
+    sourceSets.test.java.setSrcDirs([
+            releaseStagingDirectory.dir('src/test/java').asFile
+    ])
+    sourceSets.test.resources.setSrcDirs([
+            releaseStagingDirectory.dir('src/test/resources').asFile
+    ])
+}
+
+def sourceInputGate = releaseBuild.get() ? stageReleaseSource : verifyWorkingSourceTypes
+for (String taskName : [
+        'compileJava',
+        'processResources',
+        'compileTestJava',
+        'processTestResources']) {
+    tasks.named(taskName) {
+        dependsOn sourceInputGate
+    }
+}
+
+tasks.withType(ProcessResources).configureEach {
+    filePermissions {
+        unix('0644')
+    }
+    dirPermissions {
+        unix('0755')
+    }
 }
 
 def provenanceFile = layout.buildDirectory.file(
         'resources/main/META-INF/afterlight-provenance.json')
 
 tasks.named('processResources') {
-    dependsOn verifyWorkingSourceTypes
     inputs.property 'afterlightSourceCommit', sourceCommit
-    inputs.property 'afterlightSourceTreeSha256', sourceTreeSha256
+    inputs.property 'afterlightSourceTreeSha256', provenanceSourceTreeSha256
     inputs.property 'afterlightReleaseBuild', releaseBuild
-    inputs.file releasePolicy
     outputs.file provenanceFile
-    if (releaseBuild.get()) {
-        dependsOn verifyReleaseSource
-    }
     doLast {
         def output = provenanceFile.get().asFile
         output.parentFile.mkdirs()
@@ -121,7 +152,7 @@ tasks.named('processResources') {
                 sourceTreeDigestSchema: 2,
                 sourceRepository: 'https://github.com/Luskish/afterlight-signal',
                 sourceCommit: sourceCommit.get(),
-                sourceTreeSha256: sourceTreeSha256.get(),
+                sourceTreeSha256: provenanceSourceTreeSha256.get(),
                 releaseBuild: releaseBuild.get(),
                 version: project.version.toString()
         ])) + '\n'
@@ -141,12 +172,12 @@ def configureManifest = { Jar archive ->
 }
 
 tasks.named('jar', Jar) {
-    dependsOn verifyWorkingSourceTypes
+    dependsOn sourceInputGate
     configureManifest(delegate)
 }
 
 def rebuiltReleaseJar = tasks.register('reproducibleReleaseJar', Jar) {
-    dependsOn verifyWorkingSourceTypes
+    dependsOn sourceInputGate
     from sourceSets.main.output
     archiveBaseName = 'afterlight-signal'
     archiveVersion = project.version.toString()
@@ -161,6 +192,25 @@ tasks.withType(AbstractArchiveTask).configureEach {
 
 def releaseJar = tasks.named('jar', Jar).flatMap { it.archiveFile }
 
+def transitivelyDependsOn = { Task task, Task required ->
+    def pending = new ArrayDeque<Task>()
+    def visited = new LinkedHashSet<Task>()
+    pending.add(task)
+    while (!pending.isEmpty()) {
+        Task current = pending.removeFirst()
+        if (!visited.add(current)) {
+            continue
+        }
+        for (Task dependency : current.taskDependencies.getDependencies(current)) {
+            if (dependency == required) {
+                return true
+            }
+            pending.addLast(dependency)
+        }
+    }
+    return false
+}
+
 afterEvaluate {
     tasks.named('test') {
         workingDir = projectDir
@@ -168,12 +218,30 @@ afterEvaluate {
         dependsOn rebuiltReleaseJar
         systemProperty 'afterlight.source.root', layout.projectDirectory.asFile.absolutePath
         systemProperty 'afterlight.source.commit', sourceCommit.get()
-        systemProperty 'afterlight.source.tree.sha256', sourceTreeSha256.get()
+        systemProperty 'afterlight.source.tree.sha256', provenanceSourceTreeSha256.get()
         systemProperty 'afterlight.committed.source.tree.sha256', committedSourceTreeSha256.get()
         systemProperty 'afterlight.release.build', releaseBuild.get()
         systemProperty 'afterlight.release.jar', releaseJar.get().asFile.absolutePath
         systemProperty 'afterlight.rebuilt.release.jar',
                 rebuiltReleaseJar.get().archiveFile.get().asFile.absolutePath
+        systemProperty 'afterlight.release.staging.root',
+                releaseStagingDirectory.asFile.absolutePath
+        systemProperty 'afterlight.release.main.java.roots',
+                sourceSets.main.java.srcDirs*.absolutePath.join(File.pathSeparator)
+        systemProperty 'afterlight.release.main.resources.roots',
+                sourceSets.main.resources.srcDirs*.absolutePath.join(File.pathSeparator)
+        systemProperty 'afterlight.release.test.java.roots',
+                sourceSets.test.java.srcDirs*.absolutePath.join(File.pathSeparator)
+        systemProperty 'afterlight.release.test.resources.roots',
+                sourceSets.test.resources.srcDirs*.absolutePath.join(File.pathSeparator)
+        for (String taskName : [
+                'compileJava',
+                'processResources',
+                'compileTestJava',
+                'processTestResources']) {
+            systemProperty "afterlight.release.stage.precedes.${taskName}",
+                    transitivelyDependsOn(tasks.named(taskName).get(), stageReleaseSource.get())
+        }
     }
 }
 

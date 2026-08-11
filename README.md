@@ -28,7 +28,7 @@ This repository deliberately has no Gradle wrapper. Install Gradle 9.2.1 and use
 gradle clean test runGameTestServer build --no-daemon
 ```
 
-The build still rejects symlinked and hardlinked source inputs because Gradle must never consume an aliased source tree.
+The build still rejects symlinked and hardlinked source inputs because Gradle must never consume an aliased source tree. This source gate requires POSIX permissions and the `unix:nlink` file attribute, so developer and release builds are supported on macOS and Linux POSIX filesystems. Native Windows filesystems are not supported by the source gate. Use Linux CI or WSL backed by a POSIX filesystem instead.
 
 ## Release Build
 
@@ -38,9 +38,11 @@ Release artifacts use the exact source-bound command:
 gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks
 ```
 
-The release property must be exactly `true`. The gate rejects dirty tracked source, release-relevant untracked source, symlinks, hardlink aliases, unsupported Git entries, source digest mismatches, secret markers, and U+2014. It computes a domain-separated SHA-256 over each included file's Git mode, object type, path, length, and content. The committed digest is computed independently from Git objects. Build, cache, log, and runtime output directories are excluded, so generated artifacts never enter the source digest.
+The release property must be exactly `true`. Before any release Java or resource task runs, the gate rejects dirty tracked source, release-relevant untracked source, symlinks, hardlink aliases, unsupported Git entries, source digest mismatches, private-key and token markers in any regular file, and U+2014 in any valid UTF-8 regular file. It computes a domain-separated SHA-256 over each included file's Git mode, object type, path, length, and content. The committed digest is computed independently from Git objects.
 
-The JAR contract verifies the exact reviewed inventory and metadata, fixed timestamps, stable entry order, source provenance, secret and punctuation audits, common-entry client isolation, and byte-identical independent archive construction. CI runs the full clean release command twice at the same source SHA and compares `afterlight-signal-0.1.0+1.21.1.jar` byte for byte.
+After verification, the gate materializes an owner-only, read-only staging tree at `.gradle/release-source` directly from validated HEAD Git blobs. Release main and test Java compilation and resource processing consume only that staged snapshot. A post-build audit rechecks the mutable working tree and its HEAD digest before the release contract can pass. Build, cache, log, and runtime output directories are excluded, so generated artifacts and the staging tree never enter the source digest. Ordinary developer builds continue to use working source paths and remain usable with dirty regular files.
+
+The JAR contract verifies the exact reviewed inventory and metadata, fixed timestamps, stable entry order, source provenance, all-entry secret and punctuation audits, parsed class-reference isolation from client-only namespaces, and byte-identical independent archive construction. CI checks out the exact source SHA twice into separate directories, assigns separate Gradle user homes, runs the full clean release command independently in each checkout, and then compares `afterlight-signal-0.1.0+1.21.1.jar` byte for byte.
 
 ## Gate Recovery
 
@@ -49,6 +51,8 @@ The JAR contract verifies the exact reviewed inventory and metadata, fixed times
 - Hardlink: copy the file through a new temporary file so the tracked path has its own inode, then rerun the gate.
 - Digest mismatch: clear any hidden index flags with `git update-index --no-assume-unchanged <path>` or `git update-index --no-skip-worktree <path>`, restore the path, and rerun from a clean tree.
 - Secret marker or U+2014: remove the reported content rather than suppressing the audit.
+- Unsupported platform metadata: rerun on macOS or Linux with a POSIX filesystem. Native Windows cannot satisfy the hardlink and mode checks.
+- Staging failure: remove `.gradle/release-source` if necessary, restore its parent as a real directory, and rerun the exact release command from a clean committed tree.
 - Missing or changed provenance: run the exact release command from a clean committed tree. Do not edit generated files under `build/`.
 
 The release artifact is `build/libs/afterlight-signal-0.1.0+1.21.1.jar`. Generate integration checksums only after all gates pass:

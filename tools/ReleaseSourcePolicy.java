@@ -1,17 +1,22 @@
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +36,18 @@ public final class ReleaseSourcePolicy {
     private static final String TREE_MODE = "040000";
     private static final String TREE_TYPE = "tree";
     private static final LinkOption[] NOFOLLOW = {LinkOption.NOFOLLOW_LINKS};
+    private static final Set<PosixFilePermission> PRIVATE_DIRECTORY_PERMISSIONS = Set.of(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_WRITE,
+            PosixFilePermission.OWNER_EXECUTE);
+    private static final Set<PosixFilePermission> IMMUTABLE_DIRECTORY_PERMISSIONS = Set.of(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_EXECUTE);
+    private static final Set<PosixFilePermission> IMMUTABLE_REGULAR_PERMISSIONS =
+            Set.of(PosixFilePermission.OWNER_READ);
+    private static final Set<PosixFilePermission> IMMUTABLE_EXECUTABLE_PERMISSIONS = Set.of(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_EXECUTE);
     private static final List<String> EXCLUDED_PREFIXES = List.of(
             ".git/",
             ".gradle/",
@@ -41,33 +58,51 @@ public final class ReleaseSourcePolicy {
             "out/",
             "run/",
             "run-data/");
-    private static final List<SecretMarker> SECRET_MARKERS = List.of(
-            new SecretMarker(
-                    "PRIVATE_KEY",
-                    ("-----BEGIN " + "PRIVATE KEY-----").getBytes(StandardCharsets.US_ASCII)),
-            new SecretMarker(
-                    "RSA_PRIVATE_KEY",
-                    ("-----BEGIN RSA " + "PRIVATE KEY-----")
-                            .getBytes(StandardCharsets.US_ASCII)),
-            new SecretMarker(
-                    "OPENSSH_PRIVATE_KEY",
-                    ("-----BEGIN OPENSSH " + "PRIVATE KEY-----")
-                            .getBytes(StandardCharsets.US_ASCII)),
-            new SecretMarker(
+    private static final List<SecretMarker> PRIVATE_KEY_MARKERS = List.of(
+            privateKeyMarker("GENERIC_PRIVATE_KEY", "PRIVATE KEY"),
+            privateKeyMarker("ENCRYPTED_PRIVATE_KEY", "ENCRYPTED PRIVATE KEY"),
+            privateKeyMarker("RSA_PRIVATE_KEY", "RSA PRIVATE KEY"),
+            privateKeyMarker("EC_PRIVATE_KEY", "EC PRIVATE KEY"),
+            privateKeyMarker("DSA_PRIVATE_KEY", "DSA PRIVATE KEY"),
+            privateKeyMarker("OPENSSH_PRIVATE_KEY", "OPENSSH PRIVATE KEY"),
+            privateKeyMarker("PGP_PRIVATE_KEY", "PGP PRIVATE KEY BLOCK"));
+    private static final List<TokenMarker> TOKEN_MARKERS = List.of(
+            new TokenMarker("GITHUB_GHP", ascii("gh" + "p_"), 36, TokenAlphabet.ALPHANUMERIC),
+            new TokenMarker("GITHUB_GHO", ascii("gh" + "o_"), 36, TokenAlphabet.ALPHANUMERIC),
+            new TokenMarker("GITHUB_GHU", ascii("gh" + "u_"), 36, TokenAlphabet.ALPHANUMERIC),
+            new TokenMarker("GITHUB_GHS", ascii("gh" + "s_"), 36, TokenAlphabet.ALPHANUMERIC),
+            new TokenMarker("GITHUB_GHR", ascii("gh" + "r_"), 36, TokenAlphabet.ALPHANUMERIC),
+            new TokenMarker(
                     "GITHUB_PAT",
-                    ("github" + "_pat_").getBytes(StandardCharsets.US_ASCII)),
-            new SecretMarker(
+                    ascii("github" + "_pat_"),
+                    30,
+                    TokenAlphabet.ALPHANUMERIC_UNDERSCORE),
+            new TokenMarker(
                     "OPENAI_PROJECT_KEY",
-                    ("sk-" + "proj-").getBytes(StandardCharsets.US_ASCII)));
+                    ascii("sk-" + "proj-"),
+                    20,
+                    TokenAlphabet.ALPHANUMERIC_UNDERSCORE_HYPHEN),
+            new TokenMarker(
+                    "OPENAI_LEGACY_KEY",
+                    ascii("sk-"),
+                    20,
+                    TokenAlphabet.ALPHANUMERIC));
 
     private ReleaseSourcePolicy() {}
 
     public static void main(String[] arguments) {
-        if (arguments.length != 2) {
-            System.err.println(
-                    "usage: java tools/ReleaseSourcePolicy.java <verify-clean|verify-working-types|verify-release|digest-working|digest-head> <repository>");
-            System.exit(2);
+        if ((arguments.length == 3 && arguments[0].equals("stage-release"))
+                || arguments.length == 2) {
+            run(arguments);
+            return;
         }
+        System.err.println(
+                "usage: java tools/ReleaseSourcePolicy.java <verify-clean|verify-working-types|verify-release|digest-working|digest-head> <repository>\n"
+                        + "   or: java tools/ReleaseSourcePolicy.java stage-release <repository> <destination>");
+        System.exit(2);
+    }
+
+    private static void run(String[] arguments) {
         Path repository = Path.of(arguments[1]).toAbsolutePath().normalize();
         try {
             switch (arguments[0]) {
@@ -76,6 +111,8 @@ public final class ReleaseSourcePolicy {
                 case "verify-release" -> verifyRelease(repository);
                 case "digest-working" -> System.out.println(digest(workingEntries(repository)));
                 case "digest-head" -> System.out.println(digest(headEntries(repository)));
+                case "stage-release" -> stageRelease(
+                        repository, Path.of(arguments[2]).toAbsolutePath().normalize());
                 default -> throw new PolicyException("unknown command: " + arguments[0]);
             }
         } catch (IOException | InterruptedException | NoSuchAlgorithmException | PolicyException exception) {
@@ -86,18 +123,43 @@ public final class ReleaseSourcePolicy {
 
     private static void verifyRelease(Path repository)
             throws IOException, InterruptedException, NoSuchAlgorithmException, PolicyException {
-        verifyClean(repository);
-        Map<String, SourceEntry> workingEntries = workingEntries(repository);
-        auditContent(workingEntries);
-        String working = digest(workingEntries);
-        String committed = digest(headEntries(repository));
-        if (!committed.equals(working)) {
-            throw new PolicyException(
-                    "clean working digest does not match HEAD Git objects: committed="
-                            + committed
-                            + " working="
-                            + working);
+        VerifiedSources verified = verifySources(repository);
+        if (!verified.committedDigest().equals(verified.workingDigest())) {
+            throw digestMismatch(verified);
         }
+    }
+
+    private static void stageRelease(Path repository, Path destination)
+            throws IOException, InterruptedException, NoSuchAlgorithmException, PolicyException {
+        validateStageDestination(repository, destination);
+        Map<String, SourceEntry> head = headEntries(repository);
+        auditContent(head);
+        verifyClean(repository);
+        Map<String, SourceEntry> working = workingEntries(repository);
+        auditContent(working);
+        VerifiedSources verified = new VerifiedSources(head, digest(head), digest(working));
+        if (!verified.committedDigest().equals(verified.workingDigest())) {
+            throw digestMismatch(verified);
+        }
+        materialize(destination, verified.headEntries());
+    }
+
+    private static VerifiedSources verifySources(Path repository)
+            throws IOException, InterruptedException, NoSuchAlgorithmException, PolicyException {
+        verifyClean(repository);
+        Map<String, SourceEntry> working = workingEntries(repository);
+        auditContent(working);
+        Map<String, SourceEntry> head = headEntries(repository);
+        auditContent(head);
+        return new VerifiedSources(head, digest(head), digest(working));
+    }
+
+    private static PolicyException digestMismatch(VerifiedSources verified) {
+        return new PolicyException(
+                "clean working digest does not match HEAD Git objects: committed="
+                        + verified.committedDigest()
+                        + " working="
+                        + verified.workingDigest());
     }
 
     private static void verifyClean(Path repository)
@@ -129,9 +191,13 @@ public final class ReleaseSourcePolicy {
     private static Map<String, SourceEntry> workingEntries(Path repository)
             throws IOException, InterruptedException, PolicyException {
         TreeMap<String, SourceEntry> entries = new TreeMap<>();
-        TreeSet<String> paths = new TreeSet<>(nulStrings(runGit(
+        TreeSet<String> trackedPaths = new TreeSet<>(nulStrings(runGit(
                 repository, "ls-files", "-z", "--cached")));
-        paths.addAll(untrackedPaths(repository));
+        TreeSet<String> paths = new TreeSet<>(trackedPaths);
+        untrackedPaths(repository).stream()
+                .filter(path -> trackedPaths.stream()
+                        .noneMatch(tracked -> tracked.startsWith(path + "/")))
+                .forEach(paths::add);
         for (String path : paths) {
             if (!isReleaseRelevant(path)) {
                 continue;
@@ -149,13 +215,7 @@ public final class ReleaseSourcePolicy {
     }
 
     private static Path resolveWorkingInput(Path repository, String path) throws PolicyException {
-        Path relative = Path.of(path);
-        Path normalized = relative.normalize();
-        if (relative.isAbsolute()
-                || normalized.getNameCount() == 0
-                || normalized.startsWith("..")) {
-            throw new PolicyException("invalid_working_path path=" + path);
-        }
+        Path normalized = validatedRelativePath(path, "working");
         Path source = repository.resolve(normalized).normalize();
         if (!source.startsWith(repository)) {
             throw new PolicyException("invalid_working_path path=" + path);
@@ -256,6 +316,7 @@ public final class ReleaseSourcePolicy {
             if (!isReleaseRelevant(entry.path())) {
                 continue;
             }
+            validatedRelativePath(entry.path(), "git");
             String objectType = new String(
                             runGit(repository, "cat-file", "-t", entry.objectId()),
                             StandardCharsets.UTF_8)
@@ -289,60 +350,225 @@ public final class ReleaseSourcePolicy {
 
     private static void auditContent(Map<String, SourceEntry> entries) throws PolicyException {
         for (Map.Entry<String, SourceEntry> mapEntry : entries.entrySet()) {
+            String path = mapEntry.getKey();
             byte[] content = mapEntry.getValue().content();
-            if (!isTextSource(mapEntry.getKey())) {
-                continue;
-            }
-            if (contains(content, FORBIDDEN_U2014)) {
-                throw new PolicyException("forbidden_u2014 path=" + mapEntry.getKey());
-            }
-            for (SecretMarker marker : SECRET_MARKERS) {
+            for (SecretMarker marker : PRIVATE_KEY_MARKERS) {
                 if (contains(content, marker.value())) {
                     throw new PolicyException(
-                            "secret_marker path="
-                                    + mapEntry.getKey()
-                                    + " marker="
-                                    + marker.name());
+                            "secret_marker path=" + path + " marker=" + marker.name());
                 }
+            }
+            for (TokenMarker marker : TOKEN_MARKERS) {
+                if (containsToken(content, marker)) {
+                    throw new PolicyException(
+                            "secret_marker path=" + path + " marker=" + marker.name());
+                }
+            }
+            if (isValidUtf8(content) && contains(content, FORBIDDEN_U2014)) {
+                throw new PolicyException("forbidden_u2014 path=" + path);
             }
         }
     }
 
-    private static boolean isTextSource(String path) {
-        return path.equals(".gitignore")
-                || path.equals("AGENTS.md")
-                || path.equals("README.md")
-                || path.equals("build.gradle")
-                || path.equals("gradle.lockfile")
-                || path.equals("gradle.properties")
-                || path.equals("settings.gradle")
-                || path.endsWith(".gradle")
-                || path.endsWith(".java")
-                || path.endsWith(".json")
-                || path.endsWith(".mcmeta")
-                || path.endsWith(".md")
-                || path.endsWith(".properties")
-                || path.endsWith(".toml")
-                || path.endsWith(".txt")
-                || path.endsWith(".xml")
-                || path.endsWith(".yml")
-                || path.endsWith(".yaml");
+    private static boolean containsToken(byte[] content, TokenMarker marker) {
+        int offset = indexOf(content, marker.prefix(), 0);
+        while (offset >= 0) {
+            int valueStart = offset + marker.prefix().length;
+            int valueLength = 0;
+            while (valueStart + valueLength < content.length
+                    && marker.alphabet().accepts(content[valueStart + valueLength])) {
+                valueLength++;
+            }
+            if (valueLength >= marker.minimumLength()) {
+                return true;
+            }
+            offset = indexOf(content, marker.prefix(), offset + 1);
+        }
+        return false;
+    }
+
+    private static boolean isValidUtf8(byte[] content) {
+        try {
+            StandardCharsets.UTF_8
+                    .newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(content));
+            return true;
+        } catch (java.nio.charset.CharacterCodingException exception) {
+            return false;
+        }
     }
 
     private static boolean contains(byte[] content, byte[] marker) {
+        return indexOf(content, marker, 0) >= 0;
+    }
+
+    private static int indexOf(byte[] content, byte[] marker, int start) {
         if (marker.length == 0 || marker.length > content.length) {
-            return false;
+            return -1;
         }
         outer:
-        for (int offset = 0; offset <= content.length - marker.length; offset++) {
+        for (int offset = Math.max(0, start); offset <= content.length - marker.length; offset++) {
             for (int index = 0; index < marker.length; index++) {
                 if (content[offset + index] != marker[index]) {
                     continue outer;
                 }
             }
-            return true;
+            return offset;
         }
-        return false;
+        return -1;
+    }
+
+    private static void validateStageDestination(Path repository, Path destination)
+            throws PolicyException {
+        if (destination.equals(repository) || repository.startsWith(destination)) {
+            throw new PolicyException("unsafe_stage_destination path=" + destination);
+        }
+        if (destination.startsWith(repository)) {
+            String relative = repository.relativize(destination).toString().replace('\\', '/');
+            if (isReleaseRelevant(relative)) {
+                throw new PolicyException("release_relevant_stage_destination path=" + relative);
+            }
+        }
+    }
+
+    private static void materialize(Path destination, Map<String, SourceEntry> entries)
+            throws IOException, PolicyException {
+        deleteExistingStage(destination);
+        createPrivateDirectory(destination);
+        try {
+            for (Map.Entry<String, SourceEntry> mapEntry : entries.entrySet()) {
+                Path relative = validatedRelativePath(mapEntry.getKey(), "stage");
+                Path output = destination.resolve(relative).normalize();
+                if (!output.startsWith(destination)) {
+                    throw new PolicyException("invalid_stage_path path=" + mapEntry.getKey());
+                }
+                createPrivateParents(destination, output.getParent());
+                Files.write(
+                        output,
+                        mapEntry.getValue().content(),
+                        StandardOpenOption.CREATE_NEW,
+                        StandardOpenOption.WRITE);
+                verifyStagedFile(output, mapEntry.getKey(), mapEntry.getValue());
+                Files.setPosixFilePermissions(
+                        output,
+                        EXECUTABLE_MODE.equals(mapEntry.getValue().mode())
+                                ? IMMUTABLE_EXECUTABLE_PERMISSIONS
+                                : IMMUTABLE_REGULAR_PERMISSIONS);
+            }
+            try (var paths = Files.walk(destination)) {
+                for (Path directory : paths.filter(Files::isDirectory)
+                        .sorted(Comparator.reverseOrder())
+                        .toList()) {
+                    Files.setPosixFilePermissions(directory, IMMUTABLE_DIRECTORY_PERMISSIONS);
+                }
+            }
+        } catch (IOException | PolicyException exception) {
+            try {
+                deleteExistingStage(destination);
+            } catch (IOException ignored) {
+                exception.addSuppressed(ignored);
+            }
+            throw exception;
+        }
+    }
+
+    private static void verifyStagedFile(Path output, String path, SourceEntry expected)
+            throws IOException, PolicyException {
+        BasicFileAttributes attributes =
+                Files.readAttributes(output, BasicFileAttributes.class, NOFOLLOW);
+        if (!attributes.isRegularFile() || attributes.isSymbolicLink()) {
+            throw new PolicyException("non_regular_staged_input path=" + path);
+        }
+        Object rawLinkCount = Files.getAttribute(output, "unix:nlink", NOFOLLOW);
+        if (!(rawLinkCount instanceof Number number) || number.longValue() != 1) {
+            throw new PolicyException("staged_hardlink_count path=" + path);
+        }
+        byte[] actual = Files.readAllBytes(output);
+        if (!Arrays.equals(expected.content(), actual)) {
+            throw new PolicyException("staged_content_mismatch path=" + path);
+        }
+    }
+
+    private static void createPrivateParents(Path root, Path parent) throws IOException {
+        if (parent == null) {
+            return;
+        }
+        Path relative = root.relativize(parent);
+        Path current = root;
+        for (Path component : relative) {
+            current = current.resolve(component);
+            if (Files.notExists(current, NOFOLLOW)) {
+                createPrivateDirectory(current);
+            } else {
+                BasicFileAttributes attributes =
+                        Files.readAttributes(current, BasicFileAttributes.class, NOFOLLOW);
+                if (!attributes.isDirectory() || attributes.isSymbolicLink()) {
+                    throw new IOException("staging parent was replaced: " + current);
+                }
+            }
+        }
+    }
+
+    private static void createPrivateDirectory(Path directory) throws IOException {
+        Files.createDirectory(directory);
+        Files.setPosixFilePermissions(directory, PRIVATE_DIRECTORY_PERMISSIONS);
+    }
+
+    private static void deleteExistingStage(Path destination) throws IOException {
+        if (Files.notExists(destination, NOFOLLOW)) {
+            Path parent = destination.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            return;
+        }
+        BasicFileAttributes root =
+                Files.readAttributes(destination, BasicFileAttributes.class, NOFOLLOW);
+        if (!root.isDirectory() || root.isSymbolicLink()) {
+            Files.delete(destination);
+            return;
+        }
+        Files.walkFileTree(
+                destination,
+                new SimpleFileVisitor<>() {
+                    @Override
+                    public FileVisitResult preVisitDirectory(
+                            Path directory, BasicFileAttributes attributes) throws IOException {
+                        Files.setPosixFilePermissions(directory, PRIVATE_DIRECTORY_PERMISSIONS);
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+                            throws IOException {
+                        Files.delete(file);
+                        return FileVisitResult.CONTINUE;
+                    }
+
+                    @Override
+                    public FileVisitResult postVisitDirectory(Path directory, IOException failure)
+                            throws IOException {
+                        if (failure != null) {
+                            throw failure;
+                        }
+                        Files.delete(directory);
+                        return FileVisitResult.CONTINUE;
+                    }
+                });
+    }
+
+    private static Path validatedRelativePath(String path, String source) throws PolicyException {
+        Path relative = Path.of(path);
+        Path normalized = relative.normalize();
+        if (relative.isAbsolute()
+                || normalized.getNameCount() == 0
+                || normalized.startsWith("..")
+                || !normalized.toString().replace('\\', '/').equals(path)) {
+            throw new PolicyException("invalid_" + source + "_path path=" + path);
+        }
+        return normalized;
     }
 
     private static GitEntry parseGitEntry(String entry) throws PolicyException {
@@ -471,9 +697,55 @@ public final class ReleaseSourcePolicy {
         return output.toByteArray();
     }
 
+    private static SecretMarker privateKeyMarker(String name, String type) {
+        return new SecretMarker(name, ascii("-----BEGIN " + type + "-----"));
+    }
+
+    private static byte[] ascii(String value) {
+        return value.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private enum TokenAlphabet {
+        ALPHANUMERIC {
+            @Override
+            boolean accepts(byte value) {
+                return isAsciiAlphanumeric(value);
+            }
+        },
+        ALPHANUMERIC_UNDERSCORE {
+            @Override
+            boolean accepts(byte value) {
+                return isAsciiAlphanumeric(value) || value == '_';
+            }
+        },
+        ALPHANUMERIC_UNDERSCORE_HYPHEN {
+            @Override
+            boolean accepts(byte value) {
+                return isAsciiAlphanumeric(value) || value == '_' || value == '-';
+            }
+        };
+
+        abstract boolean accepts(byte value);
+
+        static boolean isAsciiAlphanumeric(byte value) {
+            int unsigned = Byte.toUnsignedInt(value);
+            return unsigned >= '0' && unsigned <= '9'
+                    || unsigned >= 'A' && unsigned <= 'Z'
+                    || unsigned >= 'a' && unsigned <= 'z';
+        }
+    }
+
     private record SecretMarker(String name, byte[] value) {}
 
+    private record TokenMarker(
+            String name, byte[] prefix, int minimumLength, TokenAlphabet alphabet) {}
+
     private record SourceEntry(String mode, String type, byte[] content) {}
+
+    private record VerifiedSources(
+            Map<String, SourceEntry> headEntries,
+            String committedDigest,
+            String workingDigest) {}
 
     private record WorkingMetadata(String mode, long size, long linkCount, Object fileKey) {
         private boolean sameFile(WorkingMetadata other) {

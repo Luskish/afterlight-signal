@@ -1,10 +1,13 @@
 package org.rllabs.afterlight;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -33,8 +36,12 @@ import java.util.jar.Attributes;
 import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.objectweb.asm.ClassWriter;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 class ReleaseJarContractTest {
     private static final byte[] DIGEST_DOMAIN =
@@ -266,23 +273,44 @@ class ReleaseJarContractTest {
     @Test
     void builtJarContainsNoSecretMarkersPrivateKeysOrU2014() throws Exception {
         assertTrue(Files.isRegularFile(RELEASE_JAR), "missing built JAR: " + RELEASE_JAR);
-        List<byte[]> forbidden = List.of(
-                ("-----BEGIN " + "PRIVATE KEY-----").getBytes(StandardCharsets.US_ASCII),
-                ("-----BEGIN RSA " + "PRIVATE KEY-----").getBytes(StandardCharsets.US_ASCII),
-                ("github" + "_pat_").getBytes(StandardCharsets.US_ASCII),
-                ("sk-" + "proj-").getBytes(StandardCharsets.US_ASCII),
-                new String(Character.toChars(0x2014)).getBytes(StandardCharsets.UTF_8));
+        auditJarContent(RELEASE_JAR);
+    }
+
+    @Test
+    void jarAuditRejectsSecretAppendedToExpectedBinaryEntry(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path mutated = temporaryDirectory.resolve("mutated.jar");
+        byte[] marker = privateKeyHeader("EC PRIVATE KEY");
         try (var zip = new ZipFile(RELEASE_JAR.toFile())) {
+            try (var output = new ZipOutputStream(Files.newOutputStream(mutated))) {
+                for (ZipEntry entry : Collections.list(zip.entries())) {
+                    output.putNextEntry(new ZipEntry(entry.getName()));
+                    if (!entry.isDirectory()) {
+                        zip.getInputStream(entry).transferTo(output);
+                    }
+                    if (entry.getName().equals("assets/afterlight/textures/gui/title.png")) {
+                        output.write(marker);
+                    }
+                    output.closeEntry();
+                }
+            }
+        }
+
+        assertThrows(AssertionError.class, () -> auditJarContent(mutated));
+    }
+
+    private static void auditJarContent(Path jar) throws Exception {
+        byte[] u2014 = new String(Character.toChars(0x2014)).getBytes(StandardCharsets.UTF_8);
+        try (var zip = new ZipFile(jar.toFile())) {
             for (ZipEntry entry : Collections.list(zip.entries())) {
                 if (entry.isDirectory()) {
                     continue;
                 }
                 byte[] payload = zip.getInputStream(entry).readAllBytes();
-                if (!isTextJarEntry(entry.getName())) {
-                    continue;
-                }
-                for (byte[] marker : forbidden) {
-                    assertFalse(contains(payload, marker), entry.getName());
+                String marker = detectedSecretMarker(payload);
+                assertTrue(marker == null, entry.getName() + ": " + marker);
+                if (isValidUtf8(payload)) {
+                    assertFalse(contains(payload, u2014), entry.getName());
                 }
             }
         }
@@ -302,31 +330,74 @@ class ReleaseJarContractTest {
                 }
             }
 
-            var pending = new ArrayDeque<>(List.of("org/rllabs/afterlight/Afterlight"));
-            var reachable = new LinkedHashSet<String>();
-            while (!pending.isEmpty()) {
-                String className = pending.removeFirst();
-                if (!reachable.add(className)) {
-                    continue;
-                }
-                byte[] payload = classes.get(className);
-                assertTrue(payload != null, "missing reachable class: " + className);
-                assertFalse(
-                        className.startsWith("org/rllabs/afterlight/client/"),
-                        "common entry reaches client class: " + className);
-                assertFalse(
-                        contains(
-                                payload,
-                                "net/minecraft/client/".getBytes(StandardCharsets.US_ASCII)),
-                        "common class references Minecraft client code: " + className);
-                for (String candidate : classes.keySet()) {
-                    if (!reachable.contains(candidate)
-                            && contains(payload, candidate.getBytes(StandardCharsets.US_ASCII))) {
-                        pending.addLast(candidate);
-                    }
-                }
-            }
+            ReleaseClassReferenceScanner.assertSafe(
+                    classes, ReleaseClassReferenceScanner.commonRoots(classes));
         }
+    }
+
+    @Test
+    void classScannerRejectsDormantReferencesToEveryClientNamespace() {
+        for (String namespace : List.of(
+                "net/minecraft/client/renderer/LevelRenderer",
+                "net/neoforged/neoforge/client/event/ScreenEvent",
+                "com/mojang/blaze3d/vertex/PoseStack",
+                "org/lwjgl/opengl/GL11")) {
+            String common = "org/rllabs/afterlight/Fixture";
+            Map<String, byte[]> classes = Map.of(
+                    common, classWithDormantReference(common, namespace));
+
+            AssertionError error = assertThrows(
+                    AssertionError.class,
+                    () -> ReleaseClassReferenceScanner.assertSafe(classes, Set.of(common)));
+
+            assertTrue(error.getMessage().matches(".*" + java.util.regex.Pattern.quote(namespace) + ".*"));
+        }
+    }
+
+    @Test
+    void classScannerRejectsProjectClientReachabilityFromEveryCommonRoot() {
+        String primary = "org/rllabs/afterlight/Afterlight";
+        String dormant = "org/rllabs/afterlight/DormantCommon";
+        String client = "org/rllabs/afterlight/client/HiddenClient";
+        Map<String, byte[]> classes = Map.of(
+                primary, emptyClass(primary),
+                dormant, classWithDormantReference(dormant, client),
+                client, emptyClass(client));
+        Set<String> roots = ReleaseClassReferenceScanner.commonRoots(classes);
+        assertEquals(Set.of(primary, dormant), roots);
+
+        AssertionError error = assertThrows(
+                AssertionError.class,
+                () -> ReleaseClassReferenceScanner.assertSafe(classes, roots));
+
+        assertTrue(error.getMessage().matches(".*" + java.util.regex.Pattern.quote(client) + ".*"));
+    }
+
+    @Test
+    void classScannerRecursivelyTraversesProjectReferences() {
+        String root = "org/rllabs/afterlight/Root";
+        String helper = "org/rllabs/afterlight/Helper";
+        String client = "org/rllabs/afterlight/client/HiddenClient";
+        Map<String, byte[]> classes = Map.of(
+                root, classWithDormantReference(root, helper),
+                helper, classWithDormantReference(helper, client),
+                client, emptyClass(client));
+
+        AssertionError error = assertThrows(
+                AssertionError.class,
+                () -> ReleaseClassReferenceScanner.assertSafe(classes, Set.of(root)));
+
+        assertTrue(error.getMessage().matches(".*" + java.util.regex.Pattern.quote(client) + ".*"));
+    }
+
+    @Test
+    void classScannerIgnoresClientNamespaceTextThatIsNotAClassReference() {
+        String common = "org/rllabs/afterlight/StringOnly";
+        Map<String, byte[]> classes = Map.of(
+                common,
+                classWithStringConstant(common, "net/minecraft/client/not-a-type"));
+
+        assertDoesNotThrow(() -> ReleaseClassReferenceScanner.assertSafe(classes, Set.of(common)));
     }
 
     @Test
@@ -338,24 +409,81 @@ class ReleaseJarContractTest {
 
     @Test
     void workflowPinsToolchainRunsExactCiTwiceAndAuditsOutputs() throws Exception {
-        String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
-        assertTrue(workflow.contains(
-                "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"));
-        assertTrue(workflow.contains(
-                "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961"));
-        assertTrue(workflow.contains(
-                "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb"));
-        assertTrue(workflow.contains("runs-on: ubuntu-24.04"));
-        assertTrue(workflow.contains("distribution: temurin"));
-        assertTrue(workflow.contains("java-version: '21.0.12+8.0.LTS'"));
-        assertTrue(workflow.contains("gradle-version: '9.2.1'"));
+        ReleaseWorkflowModel workflow = ReleaseWorkflowModel.parse(
+                ROOT.resolve(".github/workflows/build.yml"));
+        assertEquals("build", workflow.name());
+        assertEquals(Set.of("name", "on", "permissions", "jobs"), workflow.topLevelKeys());
+        assertEquals(Set.of("push", "pull_request"), workflow.triggers());
+        assertEquals(Map.of("contents", "read"), workflow.permissions());
+        assertEquals(Set.of("test"), workflow.jobs().keySet());
+        ReleaseWorkflowModel.Job job = workflow.jobs().get("test");
+        assertEquals("ubuntu-24.04", job.runner());
+        assertEquals(Set.of("runs-on", "steps"), job.keys());
+        List<ReleaseWorkflowModel.Step> steps = job.steps();
+        assertEquals(
+                List.of(
+                        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+                        "actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961",
+                        "gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb"),
+                steps.stream().map(ReleaseWorkflowModel.Step::uses).filter(java.util.Objects::nonNull).toList());
+        List<ReleaseWorkflowModel.Step> checkouts = steps.stream()
+                .filter(step -> step.uses() != null && step.uses().startsWith("actions/checkout@"))
+                .toList();
+        assertEquals(
+                List.of(
+                        Map.of(
+                                "ref", "${{ github.sha }}",
+                                "path", "source-a",
+                                "clean", "true",
+                                "fetch-depth", "1",
+                                "persist-credentials", "false"),
+                        Map.of(
+                                "ref", "${{ github.sha }}",
+                                "path", "source-b",
+                                "clean", "true",
+                                "fetch-depth", "1",
+                                "persist-credentials", "false")),
+                checkouts.stream().map(ReleaseWorkflowModel.Step::with).toList());
+        ReleaseWorkflowModel.Step java = steps.stream()
+                .filter(step -> step.uses() != null && step.uses().startsWith("actions/setup-java@"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(
+                Map.of(
+                        "distribution", "temurin",
+                        "java-version", "21.0.12+8.0.LTS",
+                        "architecture", "x64"),
+                java.with());
+        ReleaseWorkflowModel.Step gradle = steps.stream()
+                .filter(step -> step.uses() != null && step.uses().startsWith("gradle/actions/setup-gradle@"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(Map.of("gradle-version", "9.2.1"), gradle.with());
         String exactCommand =
                 "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks";
-        assertEquals(2, occurrences(workflow, exactCommand));
-        assertTrue(workflow.contains("shasum -a 256"));
-        assertTrue(workflow.contains("cmp --silent"));
-        assertTrue(workflow.contains("git ls-files '*.jar'"));
-        assertTrue(workflow.contains("git status --porcelain=v1 --untracked-files=all"));
+        List<ReleaseWorkflowModel.Step> builds = steps.stream()
+                .filter(step -> exactCommand.equals(step.run()))
+                .toList();
+        assertEquals(2, builds.size());
+        assertEquals(List.of("source-a", "source-b"), builds.stream()
+                .map(ReleaseWorkflowModel.Step::workingDirectory)
+                .toList());
+        assertEquals(
+                List.of(
+                        Map.of("GRADLE_USER_HOME", "${{ runner.temp }}/gradle-a"),
+                        Map.of("GRADLE_USER_HOME", "${{ runner.temp }}/gradle-b")),
+                builds.stream().map(ReleaseWorkflowModel.Step::environment).toList());
+        assertEquals(3, steps.stream().filter(step -> step.run() != null).count());
+        ReleaseWorkflowModel.Step audit = steps.stream()
+                .filter(step -> step.run() != null && !step.run().equals(exactCommand))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(expectedComparisonAndAuditCommand(), audit.run());
+        List<String> scalarValues = workflowScalarValues(workflow);
+        assertTrue(scalarValues.stream().noneMatch(value -> value.matches("(?s).*\\$\\{\\{\\s*secrets\\..*")));
+        assertTrue(scalarValues.stream().noneMatch(value -> value.matches(
+                "(?is).*(pull_request_target|upload-artifact|gh\\s+release|create-release|publish|id-token\\s*:\\s*write).*")));
         assertFalse(Files.exists(ROOT.resolve("gradlew")));
         assertFalse(Files.exists(ROOT.resolve("gradle/wrapper/gradle-wrapper.jar")));
     }
@@ -437,33 +565,126 @@ class ReleaseJarContractTest {
     }
 
     @Test
-    void releasePolicyRejectsSecretMarker(@TempDir Path repository) throws Exception {
-        initializeRepository(repository);
-        Path source = repository.resolve("src/main/resources/credential.txt");
-        Files.writeString(source, "github" + "_pat_" + "A".repeat(32) + "\n");
-        git(repository, "add", source.toString());
-        git(repository, "commit", "-m", "secret marker");
+    void releasePolicyRejectsEverySecretFormatInEveryFileType(@TempDir Path temporaryDirectory)
+            throws Exception {
+        List<String> paths = List.of(
+                "release.pem",
+                "release.key",
+                "release.bin",
+                "release.png",
+                "release.dat",
+                "release.secret",
+                "release.asc",
+                "token-a.bin",
+                "token-b.bin",
+                "token-c.bin",
+                "token-d.bin",
+                "token-e.bin",
+                "token-f.bin",
+                "token-g.bin",
+                "token-h.bin");
+        List<SecretFixture> fixtures = secretFixtures();
+        assertEquals(paths.size(), fixtures.size());
+        for (int index = 0; index < fixtures.size(); index++) {
+            Path repository = temporaryDirectory.resolve("repository-" + index);
+            initializeRepository(repository);
+            Path relative = Path.of("src/main/resources").resolve(paths.get(index));
+            Path source = repository.resolve(relative);
+            byte[] content = fixtures.get(index).content();
+            byte[] payload = new byte[content.length + 4];
+            payload[0] = 0;
+            payload[1] = (byte) 0xff;
+            System.arraycopy(content, 0, payload, 2, content.length);
+            payload[payload.length - 2] = 0;
+            payload[payload.length - 1] = 1;
+            Files.write(source, payload);
+            git(repository, "add", relative.toString());
+            git(repository, "commit", "-m", "secret fixture");
 
-        CommandResult result = policy("verify-release", repository);
+            CommandResult result = policy("verify-release", repository);
 
-        assertRejected(
-                result,
-                "secret_marker path=src/main/resources/credential.txt marker=GITHUB_PAT");
+            assertRejected(
+                    result,
+                    "secret_marker path="
+                            + relative
+                            + " marker="
+                            + fixtures.get(index).name());
+        }
     }
 
     @Test
-    void releasePolicyRejectsU2014(@TempDir Path repository) throws Exception {
+    void releasePolicyRejectsU2014InEveryValidUtf8SourceName(@TempDir Path temporaryDirectory)
+            throws Exception {
+        List<String> paths = List.of("release.sh", "Plugin.kt", "release.kts", "Makefile", "NOTICE");
+        for (int index = 0; index < paths.size(); index++) {
+            Path repository = temporaryDirectory.resolve("repository-" + index);
+            initializeRepository(repository);
+            Path relative = Path.of("src/main/resources").resolve(paths.get(index));
+            Path source = repository.resolve(relative);
+            Files.writeString(
+                    source,
+                    "forbidden " + new String(Character.toChars(0x2014)) + " punctuation\n");
+            git(repository, "add", relative.toString());
+            git(repository, "commit", "-m", "forbidden punctuation");
+
+            CommandResult result = policy("verify-release", repository);
+
+            assertRejected(result, "forbidden_u2014 path=" + relative);
+        }
+    }
+
+    @Test
+    void releasePolicyRejectsIgnoredUntrackedSource(@TempDir Path repository) throws Exception {
         initializeRepository(repository);
-        Path source = repository.resolve("README.md");
-        Files.writeString(
-                source,
-                "forbidden " + new String(Character.toChars(0x2014)) + " punctuation\n");
-        git(repository, "add", source.toString());
-        git(repository, "commit", "-m", "forbidden punctuation");
+        Files.writeString(repository.resolve(".gitignore"), "*.jar\nprivate/\n");
+        git(repository, "add", ".gitignore");
+        git(repository, "commit", "-m", "ignore private source");
+        Path source = repository.resolve("private/generated.java");
+        Files.createDirectories(source.getParent());
+        Files.writeString(source, "class Generated {}\n");
 
         CommandResult result = policy("verify-release", repository);
 
-        assertRejected(result, "forbidden_u2014 path=README.md");
+        assertRejected(result, "untracked:private/generated.java");
+    }
+
+    @Test
+    void releasePolicyRejectsSkipWorktreeSourceDigestMismatch(@TempDir Path repository)
+            throws Exception {
+        initializeRepository(repository);
+        git(repository, "update-index", "--skip-worktree", "build.gradle");
+        Files.writeString(repository.resolve("build.gradle"), "plugins { id 'java-library' }\n");
+        assertTrue(successful(gitResult(repository, "diff", "--name-only", "HEAD", "--")).isEmpty());
+
+        CommandResult result = policy("verify-release", repository);
+
+        assertRejected(result, "clean working digest does not match HEAD Git objects");
+    }
+
+    @Test
+    void excludedOutputsNeverInfluenceDigestOrCleanliness(@TempDir Path repository)
+            throws Exception {
+        initializeRepository(repository);
+        String before = successful(policy("digest-working", repository));
+        for (String path : List.of(
+                ".gradle/cache/state.bin",
+                "build/libs/output.jar",
+                "config/client.toml",
+                "crash-reports/report.txt",
+                "logs/latest.log",
+                "out/classes/Main.class",
+                "run/world/session.lock",
+                "run-data/output.json")) {
+            Path output = repository.resolve(path);
+            Files.createDirectories(output.getParent());
+            Files.write(output, new byte[] {1, 2, 3, 4});
+        }
+
+        String after = successful(policy("digest-working", repository));
+        CommandResult verification = policy("verify-release", repository);
+
+        assertEquals(before, after);
+        assertEquals(0, verification.exitCode(), verification.output());
     }
 
     @Test
@@ -496,6 +717,160 @@ class ReleaseJarContractTest {
 
         assertNotEquals(regular, executable);
         assertEquals(executable, successful(policy("digest-working", repository)));
+    }
+
+    @Test
+    void stageReleaseMaterializesExactImmutableHeadBytesAndModes(
+            @TempDir Path temporaryDirectory) throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path staging = temporaryDirectory.resolve("staging");
+        initializeRepository(repository);
+        Path binary = repository.resolve("src/main/resources/payload.bin");
+        Files.write(binary, new byte[] {0, 1, 2, (byte) 0xff});
+        Path script = repository.resolve("tools/release-check.sh");
+        Files.writeString(script, "#!/bin/sh\nexit 0\n");
+        Set<PosixFilePermission> executable = Files.getPosixFilePermissions(script);
+        executable.add(PosixFilePermission.OWNER_EXECUTE);
+        Files.setPosixFilePermissions(script, executable);
+        git(repository, "add", binary.toString(), script.toString());
+        git(repository, "commit", "-m", "staging fixtures");
+
+        CommandResult result = policy("stage-release", repository, staging);
+
+        assertEquals(0, result.exitCode(), result.output());
+        assertArrayEquals(
+                successfulBytes(gitBytes(repository, "show", "HEAD:src/main/resources/payload.bin")),
+                Files.readAllBytes(staging.resolve("src/main/resources/payload.bin")));
+        assertArrayEquals(
+                successfulBytes(gitBytes(repository, "show", "HEAD:tools/release-check.sh")),
+                Files.readAllBytes(staging.resolve("tools/release-check.sh")));
+        assertEquals(
+                Set.of(PosixFilePermission.OWNER_READ),
+                Files.getPosixFilePermissions(staging.resolve("src/main/resources/payload.bin")));
+        assertEquals(
+                Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_EXECUTE),
+                Files.getPosixFilePermissions(staging.resolve("tools/release-check.sh")));
+        assertEquals(
+                Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_EXECUTE),
+                Files.getPosixFilePermissions(staging));
+        assertFalse(Files.exists(staging.resolve("build")));
+    }
+
+    @Test
+    void postStageWorkingMutationCannotAlterStagedCompilerInput(
+            @TempDir Path temporaryDirectory) throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path staging = temporaryDirectory.resolve("staging");
+        initializeRepository(repository);
+        Path workingSource = repository.resolve("src/main/java/example/Main.java");
+        byte[] committed = Files.readAllBytes(workingSource);
+        assertEquals(0, policy("stage-release", repository, staging).exitCode());
+        Path stagedSource = staging.resolve("src/main/java/example/Main.java");
+
+        Files.writeString(workingSource, "package example; class Mutated {}\n");
+
+        assertArrayEquals(committed, Files.readAllBytes(stagedSource));
+        assertFalse(Files.isWritable(stagedSource));
+        assertNotEquals(
+                new String(Files.readAllBytes(workingSource), StandardCharsets.UTF_8),
+                new String(Files.readAllBytes(stagedSource), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void stageReleaseRejectsUnsupportedGitlink(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path staging = temporaryDirectory.resolve("staging");
+        initializeRepository(repository);
+        String commit = successful(gitResult(repository, "rev-parse", "HEAD"));
+        git(
+                repository,
+                "update-index",
+                "--add",
+                "--cacheinfo",
+                "160000," + commit + ",vendor/module");
+        git(repository, "commit", "-m", "gitlink fixture");
+
+        CommandResult result = policy("stage-release", repository, staging);
+
+        assertRejected(result, "unsupported_git_entry mode=160000 type=commit path=vendor/module");
+        assertFalse(Files.exists(staging));
+    }
+
+    @Test
+    void stageReleaseRejectsUnsupportedSymlinkMode(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path staging = temporaryDirectory.resolve("staging");
+        initializeRepository(repository);
+        Path link = repository.resolve("src/main/resources/linked.bin");
+        Files.createSymbolicLink(link, Path.of("mod.json"));
+        git(repository, "add", link.toString());
+        git(repository, "commit", "-m", "symlink mode fixture");
+
+        CommandResult result = policy("stage-release", repository, staging);
+
+        assertRejected(
+                result,
+                "unsupported_git_entry mode=120000 type=blob path=src/main/resources/linked.bin");
+        assertFalse(Files.exists(staging));
+    }
+
+    @Test
+    void workingTypeGateRejectsReplacedParentDirectory(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path externalMain = temporaryDirectory.resolve("external-main");
+        initializeRepository(repository);
+        Files.move(repository.resolve("src/main"), externalMain);
+        Files.createSymbolicLink(repository.resolve("src/main"), externalMain);
+
+        CommandResult result = policy("verify-working-types", repository);
+
+        assertRejected(
+                result,
+                "non_directory_working_parent path=src/main/java/example/Main.java parent=src/main kind=symbolic_link");
+    }
+
+    @Test
+    void releaseBuildBindsEveryCompiledSourceAndResourceTaskToStaging() {
+        assumeTrue(Boolean.getBoolean("afterlight.release.build"));
+        Path staging = Path.of(System.getProperty("afterlight.release.staging.root"));
+        assertEquals(
+                Set.of(staging.resolve("src/main/java").toString()),
+                pathProperty("afterlight.release.main.java.roots"));
+        assertEquals(
+                Set.of(staging.resolve("src/main/resources").toString()),
+                pathProperty("afterlight.release.main.resources.roots"));
+        assertEquals(
+                Set.of(staging.resolve("src/test/java").toString()),
+                pathProperty("afterlight.release.test.java.roots"));
+        assertEquals(
+                Set.of(staging.resolve("src/test/resources").toString()),
+                pathProperty("afterlight.release.test.resources.roots"));
+        for (String task : List.of(
+                "compileJava", "processResources", "compileTestJava", "processTestResources")) {
+            assertEquals(
+                    "true",
+                    System.getProperty("afterlight.release.stage.precedes." + task),
+                    task);
+        }
+    }
+
+    @Test
+    void releaseResourceOutputsNormalizeStagedPermissions() throws Exception {
+        assumeTrue(Boolean.getBoolean("afterlight.release.build"));
+        for (Path output : List.of(
+                ROOT.resolve("build/resources/main/META-INF"),
+                ROOT.resolve("build/resources/main/META-INF/neoforge.mods.toml"),
+                ROOT.resolve("build/resources/test/routes"),
+                ROOT.resolve("build/resources/test/routes/valid.json"))) {
+            assertTrue(Files.exists(output), output.toString());
+            Set<PosixFilePermission> permissions = Files.getPosixFilePermissions(output);
+            assertTrue(
+                    permissions.contains(PosixFilePermission.OWNER_WRITE),
+                    output + " must remain writable build output");
+        }
     }
 
     private static void initializeRepository(Path repository) throws Exception {
@@ -532,6 +907,17 @@ class ReleaseJarContractTest {
                 repository.resolve("tools/ReleaseSourcePolicy.java").toString(),
                 command,
                 repository.toString());
+    }
+
+    private static CommandResult policy(String command, Path repository, Path staging)
+            throws Exception {
+        return execute(
+                repository,
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                repository.resolve("tools/ReleaseSourcePolicy.java").toString(),
+                command,
+                repository.toString(),
+                staging.toString());
     }
 
     private static void git(Path repository, String... arguments) throws Exception {
@@ -656,6 +1042,63 @@ class ReleaseJarContractTest {
                 StandardCharsets.UTF_8);
     }
 
+    private static boolean isValidUtf8(byte[] content) {
+        return Arrays.equals(
+                content,
+                new String(content, StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private static String detectedSecretMarker(byte[] content) {
+        for (SecretFixture fixture : secretFixtures().subList(0, 7)) {
+            if (contains(content, fixture.content())) {
+                return fixture.name();
+            }
+        }
+        for (TokenPattern pattern : tokenPatterns()) {
+            if (containsToken(content, pattern)) {
+                return pattern.name();
+            }
+        }
+        return null;
+    }
+
+    private static boolean containsToken(byte[] content, TokenPattern pattern) {
+        for (int offset = 0; offset <= content.length - pattern.prefix().length; offset++) {
+            if (!matchesAt(content, pattern.prefix(), offset)) {
+                continue;
+            }
+            int length = 0;
+            int valueStart = offset + pattern.prefix().length;
+            while (valueStart + length < content.length
+                    && acceptsTokenByte(content[valueStart + length], pattern)) {
+                length++;
+            }
+            if (length >= pattern.minimumLength()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean acceptsTokenByte(byte value, TokenPattern pattern) {
+        int unsigned = Byte.toUnsignedInt(value);
+        boolean alphanumeric = unsigned >= '0' && unsigned <= '9'
+                || unsigned >= 'A' && unsigned <= 'Z'
+                || unsigned >= 'a' && unsigned <= 'z';
+        return alphanumeric
+                || pattern.underscore() && value == '_'
+                || pattern.hyphen() && value == '-';
+    }
+
+    private static boolean matchesAt(byte[] content, byte[] marker, int offset) {
+        for (int index = 0; index < marker.length; index++) {
+            if (content[offset + index] != marker[index]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static boolean contains(byte[] payload, byte[] marker) {
         if (marker.length == 0 || marker.length > payload.length) {
             return false;
@@ -672,22 +1115,163 @@ class ReleaseJarContractTest {
         return false;
     }
 
-    private static boolean isTextJarEntry(String name) {
-        return name.endsWith(".class")
-                || name.endsWith(".json")
-                || name.endsWith(".mcmeta")
-                || name.endsWith(".toml")
-                || name.endsWith(".MF");
+    private static byte[] emptyClass(String internalName) {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(
+                Opcodes.V21,
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL,
+                internalName,
+                null,
+                "java/lang/Object",
+                null);
+        writer.visitEnd();
+        return writer.toByteArray();
     }
 
-    private static int occurrences(String text, String needle) {
-        int count = 0;
-        int offset = 0;
-        while ((offset = text.indexOf(needle, offset)) >= 0) {
-            count++;
-            offset += needle.length();
+    private static byte[] classWithDormantReference(
+            String internalName, String referencedInternalName) {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(
+                Opcodes.V21,
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL,
+                internalName,
+                null,
+                "java/lang/Object",
+                null);
+        writer.visitMethod(
+                        Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_NATIVE,
+                        "dormant",
+                        "()L" + referencedInternalName + ";",
+                        null,
+                        null)
+                .visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    private static byte[] classWithStringConstant(String internalName, String value) {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(
+                Opcodes.V21,
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL,
+                internalName,
+                null,
+                "java/lang/Object",
+                null);
+        MethodVisitor method = writer.visitMethod(
+                Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC,
+                "dormant",
+                "()V",
+                null,
+                null);
+        method.visitCode();
+        method.visitLdcInsn(value);
+        method.visitInsn(Opcodes.POP);
+        method.visitInsn(Opcodes.RETURN);
+        method.visitMaxs(1, 0);
+        method.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    private static String expectedComparisonAndAuditCommand() {
+        return """
+                first=source-a/build/libs/afterlight-signal-0.1.0+1.21.1.jar
+                second=source-b/build/libs/afterlight-signal-0.1.0+1.21.1.jar
+                shasum -a 256 "$first"
+                shasum -a 256 "$second"
+                cmp --silent "$first" "$second"
+                test "$(shasum -a 256 "$first" | cut -d ' ' -f 1)" = "$(shasum -a 256 "$second" | cut -d ' ' -f 1)"
+                java source-a/tools/ReleaseSourcePolicy.java verify-release source-a
+                java source-b/tools/ReleaseSourcePolicy.java verify-release source-b
+                test -z "$(git -C source-a ls-files '*.jar')"
+                test -z "$(git -C source-b ls-files '*.jar')"
+                test -z "$(git -C source-a status --porcelain=v1 --untracked-files=all)"
+                test -z "$(git -C source-b status --porcelain=v1 --untracked-files=all)"
+                test -z "$(jps -lv | grep -E 'GradleDaemon|GradleWorkerMain' || true)"
+                """.stripTrailing();
+    }
+
+    private static List<String> workflowScalarValues(ReleaseWorkflowModel workflow) {
+        List<String> values = new ArrayList<>();
+        values.add(workflow.name());
+        values.addAll(workflow.triggers());
+        values.addAll(workflow.permissions().keySet());
+        values.addAll(workflow.permissions().values());
+        for (Map.Entry<String, ReleaseWorkflowModel.Job> jobEntry : workflow.jobs().entrySet()) {
+            values.add(jobEntry.getKey());
+            values.add(jobEntry.getValue().runner());
+            values.addAll(jobEntry.getValue().keys());
+            for (ReleaseWorkflowModel.Step step : jobEntry.getValue().steps()) {
+                for (String value : List.of(
+                        step.name() == null ? "" : step.name(),
+                        step.uses() == null ? "" : step.uses(),
+                        step.run() == null ? "" : step.run(),
+                        step.workingDirectory() == null ? "" : step.workingDirectory())) {
+                    values.add(value);
+                }
+                values.addAll(step.with().keySet());
+                values.addAll(step.with().values());
+                values.addAll(step.environment().keySet());
+                values.addAll(step.environment().values());
+            }
         }
-        return count;
+        return List.copyOf(values);
+    }
+
+    private static Set<String> pathProperty(String name) {
+        String value = System.getProperty(name);
+        assertTrue(value != null, "missing system property: " + name);
+        return Arrays.stream(value.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)))
+                .filter(path -> !path.isBlank())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    private static List<SecretFixture> secretFixtures() {
+        return List.of(
+                new SecretFixture("GENERIC_PRIVATE_KEY", privateKeyHeader("PRIVATE KEY")),
+                new SecretFixture("ENCRYPTED_PRIVATE_KEY", privateKeyHeader("ENCRYPTED PRIVATE KEY")),
+                new SecretFixture("RSA_PRIVATE_KEY", privateKeyHeader("RSA PRIVATE KEY")),
+                new SecretFixture("EC_PRIVATE_KEY", privateKeyHeader("EC PRIVATE KEY")),
+                new SecretFixture("DSA_PRIVATE_KEY", privateKeyHeader("DSA PRIVATE KEY")),
+                new SecretFixture("OPENSSH_PRIVATE_KEY", privateKeyHeader("OPENSSH PRIVATE KEY")),
+                new SecretFixture("PGP_PRIVATE_KEY", privateKeyHeader("PGP PRIVATE KEY BLOCK")),
+                new SecretFixture("GITHUB_GHP", classicGithubToken("gh" + "p_")),
+                new SecretFixture("GITHUB_GHO", classicGithubToken("gh" + "o_")),
+                new SecretFixture("GITHUB_GHU", classicGithubToken("gh" + "u_")),
+                new SecretFixture("GITHUB_GHS", classicGithubToken("gh" + "s_")),
+                new SecretFixture("GITHUB_GHR", classicGithubToken("gh" + "r_")),
+                new SecretFixture(
+                        "GITHUB_PAT",
+                        ("github" + "_pat_" + "A".repeat(22) + "_" + "B".repeat(59))
+                                .getBytes(StandardCharsets.US_ASCII)),
+                new SecretFixture(
+                        "OPENAI_LEGACY_KEY",
+                        ("sk-" + "A".repeat(48)).getBytes(StandardCharsets.US_ASCII)),
+                new SecretFixture(
+                        "OPENAI_PROJECT_KEY",
+                        ("sk-" + "proj-" + "A".repeat(48))
+                                .getBytes(StandardCharsets.US_ASCII)));
+    }
+
+    private static List<TokenPattern> tokenPatterns() {
+        return List.of(
+                new TokenPattern("GITHUB_GHP", ("gh" + "p_").getBytes(StandardCharsets.US_ASCII), 36, false, false),
+                new TokenPattern("GITHUB_GHO", ("gh" + "o_").getBytes(StandardCharsets.US_ASCII), 36, false, false),
+                new TokenPattern("GITHUB_GHU", ("gh" + "u_").getBytes(StandardCharsets.US_ASCII), 36, false, false),
+                new TokenPattern("GITHUB_GHS", ("gh" + "s_").getBytes(StandardCharsets.US_ASCII), 36, false, false),
+                new TokenPattern("GITHUB_GHR", ("gh" + "r_").getBytes(StandardCharsets.US_ASCII), 36, false, false),
+                new TokenPattern("GITHUB_PAT", ("github" + "_pat_").getBytes(StandardCharsets.US_ASCII), 30, true, false),
+                new TokenPattern("OPENAI_PROJECT_KEY", ("sk-" + "proj-").getBytes(StandardCharsets.US_ASCII), 20, true, true),
+                new TokenPattern("OPENAI_LEGACY_KEY", "sk-".getBytes(StandardCharsets.US_ASCII), 20, false, false));
+    }
+
+    private static byte[] privateKeyHeader(String type) {
+        return ("-----BEGIN " + type + "-----").getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] classicGithubToken(String prefix) {
+        return (prefix + "A".repeat(36)).getBytes(StandardCharsets.US_ASCII);
     }
 
     private record CommandResult(int exitCode, String output) {}
@@ -695,4 +1279,9 @@ class ReleaseJarContractTest {
     private record BinaryCommandResult(int exitCode, byte[] output) {}
 
     private record SourceEntry(String mode, String type, byte[] content) {}
+
+    private record SecretFixture(String name, byte[] content) {}
+
+    private record TokenPattern(
+            String name, byte[] prefix, int minimumLength, boolean underscore, boolean hyphen) {}
 }
