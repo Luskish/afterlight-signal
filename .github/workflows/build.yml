@@ -1,0 +1,44 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    env:
+      RELEASE_JAR: build/libs/afterlight-signal-0.1.0+1.21.1.jar
+      FIRST_JAR: ${{ runner.temp }}/afterlight-signal-first.jar
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          distribution: temurin
+          java-version: '21.0.12+8.0.LTS'
+          architecture: x64
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        with:
+          gradle-version: '9.2.1'
+      - name: First clean release build
+        run: gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks
+      - name: Preserve first artifact digest
+        run: |
+          cp "$RELEASE_JAR" "$FIRST_JAR"
+          shasum -a 256 "$FIRST_JAR" | tee "${FIRST_JAR}.sha256"
+      - name: Second clean release build
+        run: gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks
+      - name: Compare deterministic release bytes
+        run: |
+          shasum -a 256 "$RELEASE_JAR" | tee "${RELEASE_JAR}.sha256"
+          cmp --silent "$FIRST_JAR" "$RELEASE_JAR"
+          test "$(shasum -a 256 "$FIRST_JAR" | cut -d ' ' -f 1)" = "$(shasum -a 256 "$RELEASE_JAR" | cut -d ' ' -f 1)"
+      - name: Audit source, tracked artifacts, tree, and processes
+        run: |
+          java tools/ReleaseSourcePolicy.java verify-release .
+          test -z "$(git ls-files '*.jar')"
+          test -z "$(git status --porcelain=v1 --untracked-files=all)"
+          test -z "$(jps -lv | grep -E 'GradleDaemon|GradleWorkerMain' || true)"

@@ -1,3 +1,8 @@
+import groovy.json.JsonOutput
+import groovy.json.JsonSlurper
+import java.nio.file.Files
+import java.util.zip.ZipFile
+
 plugins {
     id 'java'
     id 'net.neoforged.moddev' version '2.0.143'
@@ -54,13 +59,184 @@ dependencyLocking {
     lockAllConfigurations()
 }
 
+def releasePolicy = file('tools/ReleaseSourcePolicy.java')
+def policyJava = file("${System.getProperty('java.home')}/bin/java")
+def sourceCommit = providers.exec {
+    commandLine 'git', 'rev-parse', 'HEAD'
+}.standardOutput.asText.map { it.trim() }
+def releasePolicyOutput = { String command ->
+    providers.exec {
+        commandLine policyJava.absolutePath,
+                releasePolicy.absolutePath,
+                command,
+                layout.projectDirectory.asFile.absolutePath
+    }.standardOutput.asText.map { it.trim() }
+}
+def sourceTreeSha256 = releasePolicyOutput('digest-working')
+def committedSourceTreeSha256 = releasePolicyOutput('digest-head')
+def releaseBuild = providers.gradleProperty('afterlightRelease').map { value ->
+    if (value != 'true') {
+        throw new GradleException('afterlightRelease must be exactly true when supplied')
+    }
+    true
+}.orElse(false)
+
+def verifyReleaseSource = tasks.register('verifyReleaseSource', Exec) {
+    commandLine policyJava.absolutePath,
+            releasePolicy.absolutePath,
+            'verify-release',
+            layout.projectDirectory.asFile.absolutePath
+    mustRunAfter tasks.named('clean')
+}
+
+def verifyWorkingSourceTypes = tasks.register('verifyWorkingSourceTypes', Exec) {
+    commandLine policyJava.absolutePath,
+            releasePolicy.absolutePath,
+            'verify-working-types',
+            layout.projectDirectory.asFile.absolutePath
+}
+
+tasks.named('compileJava') {
+    dependsOn verifyWorkingSourceTypes
+}
+
+def provenanceFile = layout.buildDirectory.file(
+        'resources/main/META-INF/afterlight-provenance.json')
+
+tasks.named('processResources') {
+    dependsOn verifyWorkingSourceTypes
+    inputs.property 'afterlightSourceCommit', sourceCommit
+    inputs.property 'afterlightSourceTreeSha256', sourceTreeSha256
+    inputs.property 'afterlightReleaseBuild', releaseBuild
+    inputs.file releasePolicy
+    outputs.file provenanceFile
+    if (releaseBuild.get()) {
+        dependsOn verifyReleaseSource
+    }
+    doLast {
+        def output = provenanceFile.get().asFile
+        output.parentFile.mkdirs()
+        output.text = JsonOutput.prettyPrint(JsonOutput.toJson([
+                schema: 3,
+                sourceTreeDigestSchema: 2,
+                sourceRepository: 'https://github.com/Luskish/afterlight-signal',
+                sourceCommit: sourceCommit.get(),
+                sourceTreeSha256: sourceTreeSha256.get(),
+                releaseBuild: releaseBuild.get(),
+                version: project.version.toString()
+        ])) + '\n'
+    }
+}
+
 tasks.withType(Test).configureEach {
     useJUnitPlatform()
 }
 
+def configureManifest = { Jar archive ->
+    archive.manifest {
+        attributes(
+                'Implementation-Title': mod_name,
+                'Implementation-Version': project.version.toString())
+    }
+}
+
+tasks.named('jar', Jar) {
+    dependsOn verifyWorkingSourceTypes
+    configureManifest(delegate)
+}
+
+def rebuiltReleaseJar = tasks.register('reproducibleReleaseJar', Jar) {
+    dependsOn verifyWorkingSourceTypes
+    from sourceSets.main.output
+    archiveBaseName = 'afterlight-signal'
+    archiveVersion = project.version.toString()
+    destinationDirectory = layout.buildDirectory.dir('reproducible-libs')
+    configureManifest(delegate)
+}
+
+tasks.withType(AbstractArchiveTask).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+}
+
+def releaseJar = tasks.named('jar', Jar).flatMap { it.archiveFile }
+
 afterEvaluate {
     tasks.named('test') {
         workingDir = projectDir
+        dependsOn tasks.named('jar')
+        dependsOn rebuiltReleaseJar
+        systemProperty 'afterlight.source.root', layout.projectDirectory.asFile.absolutePath
+        systemProperty 'afterlight.source.commit', sourceCommit.get()
+        systemProperty 'afterlight.source.tree.sha256', sourceTreeSha256.get()
+        systemProperty 'afterlight.committed.source.tree.sha256', committedSourceTreeSha256.get()
+        systemProperty 'afterlight.release.build', releaseBuild.get()
+        systemProperty 'afterlight.release.jar', releaseJar.get().asFile.absolutePath
+        systemProperty 'afterlight.rebuilt.release.jar',
+                rebuiltReleaseJar.get().archiveFile.get().asFile.absolutePath
+    }
+}
+
+def verifyReleaseSourceAfterBuild = tasks.register('verifyReleaseSourceAfterBuild', Exec) {
+    dependsOn tasks.named('jar')
+    commandLine policyJava.absolutePath,
+            releasePolicy.absolutePath,
+            'verify-release',
+            layout.projectDirectory.asFile.absolutePath
+    mustRunAfter tasks.named('jar')
+}
+
+def verifyTrackedJars = tasks.register('verifyTrackedJars') {
+    doLast {
+        def tracked = providers.exec {
+            commandLine 'git', 'ls-files', '--', '*.jar'
+        }.standardOutput.asText.get().trim()
+        if (!tracked.isEmpty()) {
+            throw new GradleException("Tracked JARs are forbidden: ${tracked}")
+        }
+    }
+}
+
+tasks.register('verifyReleaseJar') {
+    dependsOn tasks.named('test')
+    dependsOn rebuiltReleaseJar
+    dependsOn verifyReleaseSourceAfterBuild
+    dependsOn verifyTrackedJars
+    inputs.file releaseJar
+    inputs.file rebuiltReleaseJar.flatMap { it.archiveFile }
+    doLast {
+        if (!releaseBuild.get()) {
+            throw new GradleException('verifyReleaseJar requires -PafterlightRelease=true')
+        }
+        def primary = releaseJar.get().asFile
+        def rebuilt = rebuiltReleaseJar.get().archiveFile.get().asFile
+        if (Files.mismatch(primary.toPath(), rebuilt.toPath()) != -1L) {
+            throw new GradleException('Independent release JAR reconstruction changed bytes')
+        }
+        new ZipFile(primary).withCloseable { zip ->
+            def provenanceEntry = zip.getEntry('META-INF/afterlight-provenance.json')
+            if (provenanceEntry == null) {
+                throw new GradleException('Release JAR lacks source provenance')
+            }
+            def provenance = new JsonSlurper().parse(zip.getInputStream(provenanceEntry))
+            if (provenance.keySet() != [
+                    'schema',
+                    'sourceTreeDigestSchema',
+                    'sourceRepository',
+                    'sourceCommit',
+                    'sourceTreeSha256',
+                    'releaseBuild',
+                    'version'] as Set
+                    || provenance.schema != 3
+                    || provenance.sourceTreeDigestSchema != 2
+                    || provenance.sourceRepository != 'https://github.com/Luskish/afterlight-signal'
+                    || provenance.sourceCommit != sourceCommit.get()
+                    || provenance.sourceTreeSha256 != committedSourceTreeSha256.get()
+                    || provenance.releaseBuild != true
+                    || provenance.version != project.version.toString()) {
+                throw new GradleException('Release JAR provenance changed from committed source')
+            }
+        }
     }
 }
 
