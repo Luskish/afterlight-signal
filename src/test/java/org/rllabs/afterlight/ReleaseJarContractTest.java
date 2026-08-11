@@ -280,6 +280,23 @@ class ReleaseJarContractTest {
     }
 
     @Test
+    void dependencyVerificationCoversColdNeoFormJunitBomMetadata() throws Exception {
+        String metadata = Files.readString(ROOT.resolve("gradle/verification-metadata.xml"));
+        assertVerificationArtifact(
+                metadata,
+                "junit-bom-5.9.3.module",
+                "b401fd25901e582a524aa5343c4b39e28bc56e24961c1069bf2b4bbfcee46b93");
+        assertVerificationArtifact(
+                metadata,
+                "junit-bom-5.10.0.module",
+                "eb3ee6127608010694a898056e7407d117296003aba5f5db801df430b9887fcf");
+        assertVerificationArtifact(
+                metadata,
+                "junit-bom-5.10.1.module",
+                "21b0afcfffe2ecb3770f5eb00ae7a19feaee94e771fa3918173850dae78067b7");
+    }
+
+    @Test
     void jarAuditRejectsSecretAppendedToExpectedBinaryEntry(@TempDir Path temporaryDirectory)
             throws Exception {
         Path mutated = temporaryDirectory.resolve("mutated.jar");
@@ -317,6 +334,17 @@ class ReleaseJarContractTest {
                 }
             }
         }
+    }
+
+    private static void assertVerificationArtifact(String metadata, String artifact, String sha256) {
+        String opening = "<artifact name=\"" + artifact + "\">";
+        int start = metadata.indexOf(opening);
+        assertTrue(start >= 0, "missing verification artifact: " + artifact);
+        int end = metadata.indexOf("</artifact>", start);
+        assertTrue(end > start, "unterminated verification artifact: " + artifact);
+        assertTrue(
+                metadata.substring(start, end).contains("<sha256 value=\"" + sha256 + "\""),
+                "wrong verification hash: " + artifact);
     }
 
     @Test
