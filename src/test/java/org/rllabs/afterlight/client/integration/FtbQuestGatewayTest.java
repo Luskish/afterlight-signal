@@ -6,12 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import dev.ftb.mods.ftbquests.net.ClaimRewardMessage;
 import dev.ftb.mods.ftbquests.net.SubmitTaskMessage;
+import dev.ftb.mods.ftbquests.net.TogglePinnedMessage;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.rllabs.afterlight.client.integration.FtbQuestGateway.ClientAccess;
 import org.rllabs.afterlight.client.integration.FtbQuestGateway.QuestState;
@@ -45,6 +44,7 @@ class FtbQuestGatewayTest {
                 "Recover the missing carrier",
                 false,
                 true,
+                true,
                 List.of(0x01L, 0x02L),
                 List.of(task, overriddenManualTask, automaticTask),
                 List.of(reward, choice, unsupported, blocked)));
@@ -53,6 +53,7 @@ class FtbQuestGatewayTest {
                 "Carrier Restored",
                 "The channel is stable",
                 true,
+                false,
                 false,
                 List.of(),
                 List.of(),
@@ -68,6 +69,7 @@ class FtbQuestGatewayTest {
         assertEquals("Recover the missing carrier", snapshot.subtitle());
         assertFalse(snapshot.teamComplete());
         assertTrue(snapshot.startable());
+        assertTrue(snapshot.pinned());
         assertEquals(List.of(0x01L, 0x02L), snapshot.unmetDependencyIds());
         assertEquals(List.of(
                 new TaskSnapshot(TASK_ID, "Check the relay", 2L, 5L, false, true, true, true),
@@ -90,9 +92,13 @@ class FtbQuestGatewayTest {
         assertEquals(Map.of(), gateway.snapshots(route()));
         gateway.submit(TASK_ID);
         gateway.claim(REWARD_ID);
+        gateway.togglePin(QUEST_ID);
+        gateway.openArchive(QUEST_ID);
 
         assertEquals(List.of(), access.submissions);
         assertEquals(List.of(), access.claims);
+        assertEquals(List.of(), access.pins);
+        assertEquals(List.of(), access.openedArchiveQuests);
     }
 
     @Test
@@ -104,9 +110,13 @@ class FtbQuestGatewayTest {
         assertEquals(Map.of(), gateway.snapshots(route()));
         gateway.submit(TASK_ID);
         gateway.claim(REWARD_ID);
+        gateway.togglePin(QUEST_ID);
+        gateway.openArchive(QUEST_ID);
 
         assertEquals(List.of(), access.submissions);
         assertEquals(List.of(), access.claims);
+        assertEquals(List.of(), access.pins);
+        assertEquals(List.of(), access.openedArchiveQuests);
     }
 
     @Test
@@ -167,14 +177,37 @@ class FtbQuestGatewayTest {
 
     @Test
     void archiveOpensTheExactExistingQuestAndIgnoresMissingObjects() {
-        var access = new FakeClientAccess(null);
-        access.archiveQuests.add(QUEST_ID);
+        var access = new FakeClientAccess(stateWithEligibleObjects(false));
         var gateway = new FtbQuestGateway(access);
 
         gateway.openArchive(QUEST_ID);
         gateway.openArchive(COMPLETE_QUEST_ID);
 
         assertEquals(List.of(QUEST_ID), access.openedArchiveQuests);
+    }
+
+    @Test
+    void togglePinDispatchesTheExactFtbMessageForAnExistingSynchronizedQuest() {
+        var access = new FakeClientAccess(stateWithEligibleObjects(false));
+
+        new FtbQuestGateway(access).togglePin(QUEST_ID);
+
+        assertEquals(List.of(new TogglePinnedMessage(QUEST_ID)), access.pins);
+    }
+
+    @Test
+    void togglePinRejectsMissingLockedAndDisconnectedQuests() {
+        var state = stateWithEligibleObjects(false);
+        var access = new FakeClientAccess(state);
+        var gateway = new FtbQuestGateway(access);
+
+        gateway.togglePin(COMPLETE_QUEST_ID);
+        access.connected = false;
+        gateway.togglePin(QUEST_ID);
+        new FtbQuestGateway(new FakeClientAccess(stateWithEligibleObjects(true))).togglePin(QUEST_ID);
+        new FtbQuestGateway(new FakeClientAccess(null)).togglePin(QUEST_ID);
+
+        assertEquals(List.of(), access.pins);
     }
 
     private static EchoRoute route() {
@@ -190,6 +223,7 @@ class FtbQuestGatewayTest {
                 "Recover the missing carrier",
                 false,
                 true,
+                false,
                 List.of(),
                 List.of(new TaskState(TASK_ID, "Check the relay", 0L, 1L, false, 0, true, true)),
                 List.of(new RewardState(REWARD_ID, "Recovered signal", false, false, true, true))));
@@ -235,9 +269,9 @@ class FtbQuestGatewayTest {
 
     private static final class FakeClientAccess implements ClientAccess {
         private final SynchronizedState state;
-        private final Set<Long> archiveQuests = new LinkedHashSet<>();
         private final List<SubmitTaskMessage> submissions = new ArrayList<>();
         private final List<ClaimRewardMessage> claims = new ArrayList<>();
+        private final List<TogglePinnedMessage> pins = new ArrayList<>();
         private final List<Long> openedArchiveQuests = new ArrayList<>();
         private boolean connected = true;
 
@@ -266,8 +300,8 @@ class FtbQuestGatewayTest {
         }
 
         @Override
-        public boolean hasQuest(long questId) {
-            return archiveQuests.contains(questId);
+        public void send(TogglePinnedMessage message) {
+            pins.add(message);
         }
 
         @Override

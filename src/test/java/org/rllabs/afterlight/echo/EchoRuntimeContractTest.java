@@ -155,8 +155,18 @@ class EchoRuntimeContractTest {
                 "message.afterlight.echo.first_issue",
                 "message.afterlight.echo.inspect",
                 "message.afterlight.echo.signal_not_acquired",
-                "screen.afterlight.echo.placeholder.title",
-                "screen.afterlight.echo.placeholder.body")));
+                "screen.afterlight.echo.title",
+                "screen.afterlight.echo.identity",
+                "screen.afterlight.echo.state.unavailable",
+                "screen.afterlight.echo.state.actionable",
+                "screen.afterlight.echo.state.archive_required",
+                "screen.afterlight.echo.state.locked",
+                "screen.afterlight.echo.state.complete",
+                "screen.afterlight.echo.action.submit",
+                "screen.afterlight.echo.action.claim",
+                "screen.afterlight.echo.action.pin",
+                "screen.afterlight.echo.action.unpin",
+                "screen.afterlight.echo.action.archive")));
     }
 
     @Test

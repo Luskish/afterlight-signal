@@ -1,0 +1,215 @@
+package org.rllabs.afterlight.client;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+public record EchoScreenLayout(
+        int logicalWidth,
+        int logicalHeight,
+        Mode mode,
+        Rect header,
+        Rect transcript,
+        Rect route,
+        Rect progress,
+        Rect actionRail,
+        List<Rect> actionButtons) {
+    private static final int GAP = 2;
+    private static final int BUTTON_HEIGHT = 20;
+    private static final int WIDE_MIN_WIDTH = 560;
+    private static final int WIDE_MIN_HEIGHT = 300;
+    private static final int COMPACT_MIN_WIDTH = 320;
+    private static final int COMPACT_MIN_HEIGHT = 180;
+
+    public EchoScreenLayout {
+        mode = Objects.requireNonNull(mode);
+        header = Objects.requireNonNull(header);
+        transcript = Objects.requireNonNull(transcript);
+        route = Objects.requireNonNull(route);
+        progress = Objects.requireNonNull(progress);
+        actionRail = Objects.requireNonNull(actionRail);
+        actionButtons = List.copyOf(Objects.requireNonNull(actionButtons));
+    }
+
+    public static EchoScreenLayout compute(int framebufferWidth, int framebufferHeight, int guiScale) {
+        if (framebufferWidth <= 0 || framebufferHeight <= 0 || guiScale <= 0) {
+            throw new IllegalArgumentException("Framebuffer dimensions and GUI scale must be positive");
+        }
+        int logicalWidth = ceilDivide(framebufferWidth, guiScale);
+        int logicalHeight = ceilDivide(framebufferHeight, guiScale);
+        if (logicalWidth < 96 || logicalHeight < 80) {
+            throw new IllegalArgumentException("Logical screen is too small for accessible controls");
+        }
+
+        Mode mode = mode(logicalWidth, logicalHeight);
+        int margin = mode == Mode.COMPACT ? 2 : 4;
+        int headerHeight = mode == Mode.COMPACT ? 36 : 26;
+        Rect header = new Rect(margin, margin, logicalWidth - margin * 2, headerHeight);
+
+        if (mode == Mode.WIDE) {
+            return computeWide(logicalWidth, logicalHeight, mode, margin, header);
+        }
+        return computeBottomRail(logicalWidth, logicalHeight, mode, margin, header);
+    }
+
+    public List<Rect> panes() {
+        return List.of(header, transcript, route, progress, actionRail);
+    }
+
+    private static EchoScreenLayout computeWide(
+            int logicalWidth,
+            int logicalHeight,
+            Mode mode,
+            int margin,
+            Rect header) {
+        int bodyY = header.bottom() + GAP;
+        int bodyHeight = logicalHeight - margin - bodyY;
+        int actionWidth = clamp(logicalWidth / 5, 104, 136);
+        Rect actionRail = new Rect(logicalWidth - margin - actionWidth, bodyY, actionWidth, bodyHeight);
+
+        int contentWidth = actionRail.x() - GAP - margin;
+        int transcriptWidth = clamp(contentWidth * 3 / 10, 86, 164);
+        Rect transcript = new Rect(margin, bodyY, transcriptWidth, bodyHeight);
+        int centerX = transcript.right() + GAP;
+        int centerWidth = actionRail.x() - GAP - centerX;
+        int routeHeight = (bodyHeight - GAP) * 3 / 5;
+        Rect route = new Rect(centerX, bodyY, centerWidth, routeHeight);
+        Rect progress = new Rect(centerX, route.bottom() + GAP, centerWidth, bodyHeight - routeHeight - GAP);
+
+        List<Rect> buttons = verticalButtons(actionRail);
+        return new EchoScreenLayout(
+                logicalWidth,
+                logicalHeight,
+                mode,
+                header,
+                transcript,
+                route,
+                progress,
+                actionRail,
+                buttons);
+    }
+
+    private static EchoScreenLayout computeBottomRail(
+            int logicalWidth,
+            int logicalHeight,
+            Mode mode,
+            int margin,
+            Rect header) {
+        int actionHeight = mode == Mode.COMPACT ? 24 : 26;
+        Rect actionRail = new Rect(
+                margin,
+                logicalHeight - margin - actionHeight,
+                logicalWidth - margin * 2,
+                actionHeight);
+        int bodyY = header.bottom() + GAP;
+        int bodyHeight = actionRail.y() - GAP - bodyY;
+        int contentWidth = logicalWidth - margin * 2;
+        int minimumTranscript = mode == Mode.COMPACT ? 46 : 72;
+        int transcriptWidth = clamp(contentWidth * 3 / 10, minimumTranscript, Math.max(minimumTranscript, contentWidth / 2));
+        Rect transcript = new Rect(margin, bodyY, transcriptWidth, bodyHeight);
+        int centerX = transcript.right() + GAP;
+        int centerWidth = logicalWidth - margin - centerX;
+        int routeHeight = (bodyHeight - GAP) / 2;
+        Rect route = new Rect(centerX, bodyY, centerWidth, routeHeight);
+        Rect progress = new Rect(centerX, route.bottom() + GAP, centerWidth, bodyHeight - routeHeight - GAP);
+
+        List<Rect> buttons = horizontalButtons(actionRail);
+        return new EchoScreenLayout(
+                logicalWidth,
+                logicalHeight,
+                mode,
+                header,
+                transcript,
+                route,
+                progress,
+                actionRail,
+                buttons);
+    }
+
+    private static List<Rect> verticalButtons(Rect rail) {
+        int padding = 4;
+        int buttonGap = 6;
+        int availableHeight = rail.height() - padding * 2 - buttonGap * 3;
+        int buttonHeight = clamp(availableHeight / 4, BUTTON_HEIGHT, 28);
+        int usedHeight = buttonHeight * 4 + buttonGap * 3;
+        int y = rail.y() + Math.max(padding, (rail.height() - usedHeight) / 2);
+        List<Rect> buttons = new ArrayList<>(4);
+        for (int index = 0; index < 4; index++) {
+            buttons.add(new Rect(rail.x() + padding, y, rail.width() - padding * 2, buttonHeight));
+            y += buttonHeight + buttonGap;
+        }
+        return List.copyOf(buttons);
+    }
+
+    private static List<Rect> horizontalButtons(Rect rail) {
+        int padding = 3;
+        int availableWidth = rail.width() - padding * 2 - GAP * 3;
+        int baseWidth = availableWidth / 4;
+        int remainder = availableWidth % 4;
+        int x = rail.x() + padding;
+        int y = rail.y() + (rail.height() - BUTTON_HEIGHT) / 2;
+        List<Rect> buttons = new ArrayList<>(4);
+        for (int index = 0; index < 4; index++) {
+            int width = baseWidth + (index < remainder ? 1 : 0);
+            buttons.add(new Rect(x, y, width, BUTTON_HEIGHT));
+            x += width + GAP;
+        }
+        return List.copyOf(buttons);
+    }
+
+    private static Mode mode(int width, int height) {
+        if (width < COMPACT_MIN_WIDTH || height < COMPACT_MIN_HEIGHT) {
+            return Mode.COMPACT;
+        }
+        if (width >= WIDE_MIN_WIDTH && height >= WIDE_MIN_HEIGHT) {
+            return Mode.WIDE;
+        }
+        return Mode.STANDARD;
+    }
+
+    private static int ceilDivide(int value, int divisor) {
+        return (int) (((long) value + divisor - 1L) / divisor);
+    }
+
+    private static int clamp(int value, int minimum, int maximum) {
+        return Math.max(minimum, Math.min(maximum, value));
+    }
+
+    public enum Mode {
+        WIDE,
+        STANDARD,
+        COMPACT
+    }
+
+    public record Rect(int x, int y, int width, int height) {
+        public Rect {
+            if (width <= 0 || height <= 0) {
+                throw new IllegalArgumentException("Rectangle dimensions must be positive");
+            }
+        }
+
+        public int right() {
+            return x + width;
+        }
+
+        public int bottom() {
+            return y + height;
+        }
+
+        public boolean contains(Rect other) {
+            Objects.requireNonNull(other);
+            return other.x >= x
+                    && other.y >= y
+                    && other.right() <= right()
+                    && other.bottom() <= bottom();
+        }
+
+        public boolean overlaps(Rect other) {
+            Objects.requireNonNull(other);
+            return x < other.right()
+                    && right() > other.x
+                    && y < other.bottom()
+                    && bottom() > other.y;
+        }
+    }
+}

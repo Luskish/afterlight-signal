@@ -31,6 +31,9 @@ neoForge {
         }
     }
     runs {
+        client {
+            client()
+        }
         gameTestServer {
             type = "gameTestServer"
         }

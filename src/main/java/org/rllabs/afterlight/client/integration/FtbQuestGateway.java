@@ -4,6 +4,7 @@ import dev.ftb.mods.ftblibrary.ui.Button;
 import dev.ftb.mods.ftbquests.client.ClientQuestFile;
 import dev.ftb.mods.ftbquests.net.ClaimRewardMessage;
 import dev.ftb.mods.ftbquests.net.SubmitTaskMessage;
+import dev.ftb.mods.ftbquests.net.TogglePinnedMessage;
 import dev.ftb.mods.ftbquests.quest.Quest;
 import dev.ftb.mods.ftbquests.quest.QuestObject;
 import dev.ftb.mods.ftbquests.quest.TeamData;
@@ -87,8 +88,18 @@ public final class FtbQuestGateway implements EchoQuestGateway {
     }
 
     @Override
+    public void togglePin(long questId) {
+        SynchronizedState state = access.synchronizedState();
+        if (state == null || state.locked() || !access.connected() || state.quest(questId) == null) {
+            return;
+        }
+        access.send(new TogglePinnedMessage(questId));
+    }
+
+    @Override
     public void openArchive(long questId) {
-        if (access.hasQuest(questId)) {
+        SynchronizedState state = access.synchronizedState();
+        if (state != null && !state.locked() && state.quest(questId) != null) {
             access.openArchive(questId);
         }
     }
@@ -106,6 +117,7 @@ public final class FtbQuestGateway implements EchoQuestGateway {
                 quest.subtitle(),
                 quest.teamComplete(),
                 quest.startable(),
+                quest.pinned(),
                 quest.unmetDependencyIds(),
                 tasks,
                 rewards);
@@ -151,7 +163,7 @@ public final class FtbQuestGateway implements EchoQuestGateway {
 
         void send(ClaimRewardMessage message);
 
-        boolean hasQuest(long questId);
+        void send(TogglePinnedMessage message);
 
         void openArchive(long questId);
     }
@@ -172,6 +184,7 @@ public final class FtbQuestGateway implements EchoQuestGateway {
             String subtitle,
             boolean teamComplete,
             boolean startable,
+            boolean pinned,
             List<Long> unmetDependencyIds,
             List<TaskState> tasks,
             List<RewardState> rewards) {
@@ -181,6 +194,18 @@ public final class FtbQuestGateway implements EchoQuestGateway {
             unmetDependencyIds = List.copyOf(Objects.requireNonNull(unmetDependencyIds));
             tasks = List.copyOf(Objects.requireNonNull(tasks));
             rewards = List.copyOf(Objects.requireNonNull(rewards));
+        }
+
+        QuestState(
+                long id,
+                String title,
+                String subtitle,
+                boolean teamComplete,
+                boolean startable,
+                List<Long> unmetDependencyIds,
+                List<TaskState> tasks,
+                List<RewardState> rewards) {
+            this(id, title, subtitle, teamComplete, startable, false, unmetDependencyIds, tasks, rewards);
         }
     }
 
@@ -246,9 +271,8 @@ public final class FtbQuestGateway implements EchoQuestGateway {
         }
 
         @Override
-        public boolean hasQuest(long questId) {
-            ClientQuestFile file = ClientQuestFile.INSTANCE;
-            return file != null && file.getQuest(questId) != null;
+        public void send(TogglePinnedMessage message) {
+            PacketDistributor.sendToServer(message);
         }
 
         @Override
@@ -296,6 +320,7 @@ public final class FtbQuestGateway implements EchoQuestGateway {
                     quest.getSubtitle().getString(),
                     teamData.isCompleted(quest),
                     startable,
+                    teamData.isQuestPinned(player, quest.getId()),
                     unmetDependencyIds,
                     tasks,
                     rewards);

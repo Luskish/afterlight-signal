@@ -11,5 +11,7 @@ public interface EchoQuestGateway {
 
     void claim(long rewardId);
 
+    void togglePin(long questId);
+
     void openArchive(long questId);
 }

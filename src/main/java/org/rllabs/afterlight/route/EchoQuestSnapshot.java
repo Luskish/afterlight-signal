@@ -9,6 +9,7 @@ public record EchoQuestSnapshot(
         String subtitle,
         boolean teamComplete,
         boolean startable,
+        boolean pinned,
         List<Long> unmetDependencyIds,
         List<TaskSnapshot> tasks,
         List<RewardSnapshot> rewards) {
@@ -18,6 +19,18 @@ public record EchoQuestSnapshot(
         unmetDependencyIds = List.copyOf(Objects.requireNonNull(unmetDependencyIds));
         tasks = List.copyOf(Objects.requireNonNull(tasks));
         rewards = List.copyOf(Objects.requireNonNull(rewards));
+    }
+
+    public EchoQuestSnapshot(
+            long questId,
+            String title,
+            String subtitle,
+            boolean teamComplete,
+            boolean startable,
+            List<Long> unmetDependencyIds,
+            List<TaskSnapshot> tasks,
+            List<RewardSnapshot> rewards) {
+        this(questId, title, subtitle, teamComplete, startable, false, unmetDependencyIds, tasks, rewards);
     }
 
     public record TaskSnapshot(
