@@ -266,6 +266,7 @@ afterEvaluate {
         dependsOn tasks.named('jar')
         dependsOn rebuiltReleaseJar
         systemProperty 'afterlight.source.root', layout.projectDirectory.asFile.absolutePath
+        systemProperty 'afterlight.lock.context', lockContext
         systemProperty 'afterlight.source.commit', configuredSourceCommit
         systemProperty 'afterlight.source.tree.sha256', releaseBuild.get()
                 ? configuredCommittedSourceTreeSha256

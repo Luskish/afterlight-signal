@@ -473,6 +473,7 @@ class ReleaseJarContractTest {
         assertTrue(build.contains(
                 "lockFile = file(\"gradle/dependency-locks/${lockContext}.lockfile\")"));
         assertTrue(build.contains("lockAllConfigurations()"));
+        assertTrue(build.contains("systemProperty 'afterlight.lock.context', lockContext"));
         assertFalse(build.contains("deactivateDependencyLocking"));
         assertFalse(Files.exists(ROOT.resolve("gradle.lockfile")));
 
@@ -1660,6 +1661,7 @@ class ReleaseJarContractTest {
                 "-x",
                 "test",
                 "-PafterlightRelease=true",
+                "-PafterlightLockContext=" + System.getProperty("afterlight.lock.context"),
                 "--offline",
                 "--no-daemon",
                 "--no-build-cache",
