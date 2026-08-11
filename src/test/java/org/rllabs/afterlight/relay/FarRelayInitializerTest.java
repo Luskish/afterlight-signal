@@ -53,8 +53,8 @@ class FarRelayInitializerTest {
     @Test
     void savedDataPersistsSchemaOneAndSitesInEnumOrder() {
         FarRelaySavedData data = new FarRelaySavedData();
-        assertTrue(data.markInitialized(RelaySite.NORTH));
-        assertTrue(data.markInitialized(RelaySite.CENTRAL));
+        assertTrue(data.markInitialized(RelaySite.NORTH, 72));
+        assertTrue(data.markInitialized(RelaySite.CENTRAL, 64));
 
         CompoundTag tag = data.save(new CompoundTag(), RegistryAccess.EMPTY);
 
@@ -64,26 +64,44 @@ class FarRelayInitializerTest {
                 tag.getList("initialized_sites", Tag.TAG_STRING).stream()
                         .map(Tag::getAsString)
                         .toList());
+        assertEquals(64, tag.getCompound("platform_heights").getInt("CENTRAL"));
+        assertEquals(72, tag.getCompound("platform_heights").getInt("NORTH"));
         FarRelaySavedData loaded = FarRelaySavedData.load(tag, RegistryAccess.EMPTY);
         assertEquals(Set.of(RelaySite.CENTRAL, RelaySite.NORTH), loaded.initializedSites());
+        assertEquals(64, loaded.platformY(RelaySite.CENTRAL).orElseThrow());
+        assertEquals(72, loaded.platformY(RelaySite.NORTH).orElseThrow());
         assertFalse(loaded.isDirty());
+    }
+
+    @Test
+    void schemaOneWithoutStoredHeightRemainsDiscoverable() {
+        CompoundTag tag = new CompoundTag();
+        tag.putInt("schema", 1);
+        var initialized = new net.minecraft.nbt.ListTag();
+        initialized.add(net.minecraft.nbt.StringTag.valueOf("WEST"));
+        tag.put("initialized_sites", initialized);
+
+        FarRelaySavedData loaded = FarRelaySavedData.load(tag, RegistryAccess.EMPTY);
+
+        assertTrue(loaded.isInitialized(RelaySite.WEST));
+        assertTrue(loaded.platformY(RelaySite.WEST).isEmpty());
     }
 
     @Test
     void markingAnInitializedSiteIsIdempotent() {
         FarRelaySavedData data = new FarRelaySavedData();
 
-        assertTrue(data.markInitialized(RelaySite.EAST));
+        assertTrue(data.markInitialized(RelaySite.EAST, 70));
         assertTrue(data.isDirty());
         data.setDirty(false);
-        assertFalse(data.markInitialized(RelaySite.EAST));
+        assertFalse(data.markInitialized(RelaySite.EAST, 70));
         assertFalse(data.isDirty());
     }
 
     @Test
     void initializedSiteViewCannotMutateSavedState() {
         FarRelaySavedData data = new FarRelaySavedData();
-        data.markInitialized(RelaySite.WEST);
+        data.markInitialized(RelaySite.WEST, 68);
 
         assertThrows(
                 UnsupportedOperationException.class,

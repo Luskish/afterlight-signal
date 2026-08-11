@@ -1,6 +1,7 @@
 package org.rllabs.afterlight.relay;
 
 import java.util.Optional;
+import java.util.OptionalInt;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
@@ -8,6 +9,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import org.rllabs.afterlight.EchoContent;
 
 public final class FarRelayInitializer {
@@ -46,11 +48,25 @@ public final class FarRelayInitializer {
 
     private static void ensureSite(
             ServerLevel level, FarRelaySavedData data, RelaySite site) {
+        loadConstructionChunks(level, site);
         if (data.isInitialized(site)) {
+            int platformY = data.platformY(site).orElseGet(() -> rediscoverPlatformY(level, site)
+                    .orElseThrow(() -> new IllegalStateException(
+                            "Far Relay marked site height unavailable: " + site)));
+            repairMarkedSite(level, site, platformY);
+            if (!isComplete(level, site, platformY)) {
+                throw new IllegalStateException(
+                        "Far Relay marked site repair blocked: "
+                                + site
+                                + " at Y "
+                                + platformY
+                                + ", "
+                                + firstIncompleteRequirement(level, site, platformY));
+            }
+            data.markInitialized(site, platformY);
             return;
         }
 
-        loadConstructionChunks(level, site);
         int platformY = findPlatformY(level, site);
         buildPlatform(level, site, platformY);
         placeLootChest(level, site, platformY);
@@ -60,7 +76,7 @@ public final class FarRelayInitializer {
         if (!isComplete(level, site, platformY)) {
             throw new IllegalStateException("Far Relay site initialization incomplete: " + site);
         }
-        data.markInitialized(site);
+        data.markInitialized(site, platformY);
     }
 
     private static void loadConstructionChunks(ServerLevel level, RelaySite site) {
@@ -87,6 +103,67 @@ public final class FarRelayInitializer {
             }
         }
         return FALLBACK_PLATFORM_Y;
+    }
+
+    private static OptionalInt rediscoverPlatformY(ServerLevel level, RelaySite site) {
+        int bestY = 0;
+        int bestScore = 0;
+        for (int distance = 0; distance <= SURFACE_SEARCH_RADIUS; distance++) {
+            int above = SURFACE_CENTER_Y + distance;
+            int aboveScore = platformEvidenceScore(level, site, above);
+            if (aboveScore > bestScore) {
+                bestY = above;
+                bestScore = aboveScore;
+            }
+            if (distance > 0) {
+                int below = SURFACE_CENTER_Y - distance;
+                int belowScore = platformEvidenceScore(level, site, below);
+                if (belowScore > bestScore) {
+                    bestY = below;
+                    bestScore = belowScore;
+                }
+            }
+        }
+        int fallbackScore = platformEvidenceScore(level, site, FALLBACK_PLATFORM_Y);
+        if (fallbackScore > bestScore) {
+            bestY = FALLBACK_PLATFORM_Y;
+            bestScore = fallbackScore;
+        }
+        return bestScore == 0 ? OptionalInt.empty() : OptionalInt.of(bestY);
+    }
+
+    private static int platformEvidenceScore(
+            ServerLevel level, RelaySite site, int platformY) {
+        if (platformY < level.getMinBuildHeight()
+                || platformY + 2 >= level.getMaxBuildHeight()) {
+            return 0;
+        }
+        int score = 0;
+        for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
+            for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
+                BlockPos floor = new BlockPos(
+                        site.x() + deltaX, platformY, site.z() + deltaZ);
+                if (level.getBlockState(floor).is(EchoContent.RELAY_STONE.get())) {
+                    score++;
+                }
+            }
+        }
+        BlockEntity blockEntity = level.getBlockEntity(chestPosition(site, platformY));
+        if (blockEntity instanceof ChestBlockEntity chest
+                && chest.getLootTable() == FarRelayKeys.LOOT_TABLE) {
+            score += 256;
+        }
+        if (site == RelaySite.CENTRAL) {
+            if (level.getBlockState(new BlockPos(site.x() + 3, platformY + 1, site.z()))
+                    .is(EchoContent.RETURN_TERMINAL.get())) {
+                score += 256;
+            }
+            if (level.getBlockState(new BlockPos(site.x() - 3, platformY + 1, site.z()))
+                    .is(EchoContent.FUTURE_CONSOLE.get())) {
+                score += 256;
+            }
+        }
+        return score;
     }
 
     private static boolean isSafeSurface(ServerLevel level, RelaySite site, int y) {
@@ -142,9 +219,77 @@ public final class FarRelayInitializer {
         }
     }
 
+    private static void repairMarkedSite(
+            ServerLevel level, RelaySite site, int platformY) {
+        for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
+            for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
+                BlockPos floor = new BlockPos(
+                        site.x() + deltaX, platformY, site.z() + deltaZ);
+                replaceIfMissingOrReplaceable(
+                        level, floor, EchoContent.RELAY_STONE.get().defaultBlockState());
+                BlockPos above = floor.above();
+                if (!isRequiredSiteBlock(site, platformY, above)) {
+                    clearIfReplaceable(level, above);
+                }
+                clearIfReplaceable(level, floor.above(2));
+            }
+        }
+        boolean placedChest = repairRequiredBlock(
+                level,
+                chestPosition(site, platformY),
+                Blocks.CHEST.defaultBlockState());
+        if (placedChest) {
+            configureLootChest(level, site, platformY);
+        }
+        if (site == RelaySite.CENTRAL) {
+            repairRequiredBlock(
+                    level,
+                    new BlockPos(site.x() + 3, platformY + 1, site.z()),
+                    EchoContent.RETURN_TERMINAL.get().defaultBlockState());
+            repairRequiredBlock(
+                    level,
+                    new BlockPos(site.x() - 3, platformY + 1, site.z()),
+                    EchoContent.FUTURE_CONSOLE.get().defaultBlockState());
+        }
+    }
+
+    private static boolean replaceIfMissingOrReplaceable(
+            ServerLevel level,
+            BlockPos position,
+            BlockState required) {
+        BlockState current = level.getBlockState(position);
+        if (current.is(required.getBlock())) {
+            return false;
+        }
+        if (current.canBeReplaced()) {
+            level.setBlock(position, required, Block.UPDATE_ALL);
+            return true;
+        }
+        return false;
+    }
+
+    private static boolean repairRequiredBlock(
+            ServerLevel level,
+            BlockPos position,
+            BlockState required) {
+        return replaceIfMissingOrReplaceable(level, position, required);
+    }
+
+    private static void clearIfReplaceable(ServerLevel level, BlockPos position) {
+        if (!level.getBlockState(position).isAir()
+                && level.getBlockState(position).canBeReplaced()) {
+            level.setBlock(position, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+    }
+
     private static void placeLootChest(ServerLevel level, RelaySite site, int platformY) {
         BlockPos position = chestPosition(site, platformY);
         level.setBlock(position, Blocks.CHEST.defaultBlockState(), Block.UPDATE_ALL);
+        configureLootChest(level, site, platformY);
+    }
+
+    private static void configureLootChest(ServerLevel level, RelaySite site, int platformY) {
+        BlockPos position = chestPosition(site, platformY);
         BlockEntity blockEntity = level.getBlockEntity(position);
         if (blockEntity instanceof ChestBlockEntity chest) {
             chest.setLootTable(FarRelayKeys.LOOT_TABLE);
@@ -195,6 +340,43 @@ public final class FarRelayInitializer {
                         .is(EchoContent.RETURN_TERMINAL.get())
                 && level.getBlockState(new BlockPos(site.x() - 3, platformY + 1, site.z()))
                         .is(EchoContent.FUTURE_CONSOLE.get());
+    }
+
+    private static String firstIncompleteRequirement(
+            ServerLevel level, RelaySite site, int platformY) {
+        for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
+            for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
+                BlockPos floor = new BlockPos(
+                        site.x() + deltaX, platformY, site.z() + deltaZ);
+                if (!level.getBlockState(floor).is(EchoContent.RELAY_STONE.get())) {
+                    return "platform=" + floor + " state=" + level.getBlockState(floor);
+                }
+                BlockPos above = floor.above();
+                if (!isRequiredSiteBlock(site, platformY, above)
+                        && !level.getBlockState(above).isAir()) {
+                    return "clearance=" + above + " state=" + level.getBlockState(above);
+                }
+                if (!level.getBlockState(floor.above(2)).isAir()) {
+                    return "headroom=" + floor.above(2)
+                            + " state="
+                            + level.getBlockState(floor.above(2));
+                }
+            }
+        }
+        BlockEntity blockEntity = level.getBlockEntity(chestPosition(site, platformY));
+        if (!(blockEntity instanceof ChestBlockEntity chest)) {
+            return "chest=" + chestPosition(site, platformY) + " state="
+                    + level.getBlockState(chestPosition(site, platformY));
+        }
+        if (chest.getLootTable() != FarRelayKeys.LOOT_TABLE) {
+            return "loot_table=" + chest.getLootTable();
+        }
+        if (site == RelaySite.CENTRAL
+                && !level.getBlockState(new BlockPos(site.x() + 3, platformY + 1, site.z()))
+                        .is(EchoContent.RETURN_TERMINAL.get())) {
+            return "return_terminal_missing";
+        }
+        return "future_console_missing";
     }
 
     private static boolean isRequiredSiteBlock(

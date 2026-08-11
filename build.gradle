@@ -16,6 +16,8 @@ base {
     archivesName = 'afterlight-signal'
 }
 
+def dedicatedAcceptanceMarker = layout.buildDirectory.file('dedicated-acceptance-success.txt')
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
@@ -45,6 +47,8 @@ neoForge {
                 server()
                 gameDirectory = layout.buildDirectory.dir('dedicated-acceptance')
                 systemProperty 'afterlight.dedicated.acceptance', 'true'
+                systemProperty 'afterlight.dedicated.acceptance.marker',
+                        dedicatedAcceptanceMarker.get().asFile.absolutePath
                 programArgument '--nogui'
             } else {
                 type = "gameTestServer"
@@ -223,6 +227,8 @@ tasks.named('runGameTestServer') {
     if (providers.gradleProperty('afterlightDedicatedAcceptance').orNull == 'true') {
         doFirst {
             def directory = layout.buildDirectory.dir('dedicated-acceptance').get().asFile
+            dedicatedAcceptanceMarker.get().asFile.delete()
+            project.delete(directory)
             directory.mkdirs()
             new File(directory, 'eula.txt').text = 'eula=true\n'
             new File(directory, 'server.properties').text = '''\
@@ -230,6 +236,11 @@ online-mode=false
 server-port=0
 spawn-protection=0
 '''
+        }
+        doLast {
+            if (!dedicatedAcceptanceMarker.get().asFile.isFile()) {
+                throw new GradleException('Dedicated acceptance did not write its success marker')
+            }
         }
     }
 }

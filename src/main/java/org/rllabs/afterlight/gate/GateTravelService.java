@@ -31,6 +31,7 @@ public final class GateTravelService {
     public enum TravelResult {
         SUCCESS,
         RATE_LIMITED,
+        ACTIVE_RETURN_TARGET,
         DESTINATION_UNAVAILABLE,
         NO_SAFE_DESTINATION,
         TRANSFER_FAILED
@@ -40,6 +41,9 @@ public final class GateTravelService {
             ServerPlayer player, BlockPos sourceControllerPosition) {
         if (!acquireCollisionAttempt(player)) {
             return TravelResult.RATE_LIMITED;
+        }
+        if (hasActiveReturnTarget(player)) {
+            return TravelResult.ACTIVE_RETURN_TARGET;
         }
         ServerLevel destination = player.server.getLevel(FarRelayKeys.LEVEL);
         if (destination == null) {
@@ -54,6 +58,9 @@ public final class GateTravelService {
             ServerLevel destination) {
         if (!acquireCollisionAttempt(player)) {
             return TravelResult.RATE_LIMITED;
+        }
+        if (hasActiveReturnTarget(player)) {
+            return TravelResult.ACTIVE_RETURN_TARGET;
         }
         return travelToFarRelayAfterRateLimit(player, sourceControllerPosition, destination);
     }
@@ -170,12 +177,20 @@ public final class GateTravelService {
                 player.getYRot(),
                 player.getXRot());
         player.setData(EchoContent.GATE_RETURN_TARGET, target);
-        if (!transfer(
-                player,
-                destination,
-                arrival.orElseThrow(),
-                player.getYRot(),
-                player.getXRot())) {
+        boolean transferred;
+        try {
+            transferred = transfer(
+                    player,
+                    destination,
+                    arrival.orElseThrow(),
+                    player.getYRot(),
+                    player.getXRot());
+        } catch (RuntimeException exception) {
+            player.removeData(EchoContent.GATE_RETURN_TARGET);
+            return TravelResult.TRANSFER_FAILED;
+        }
+        if (!transferred) {
+            player.removeData(EchoContent.GATE_RETURN_TARGET);
             return TravelResult.TRANSFER_FAILED;
         }
         grantAdvancement(player, FarRelayKeys.FAR_RELAY_ARRIVAL);
@@ -214,6 +229,10 @@ public final class GateTravelService {
         }
         player.setDeltaMovement(Vec3.ZERO);
         return true;
+    }
+
+    private static boolean hasActiveReturnTarget(ServerPlayer player) {
+        return player.getExistingData(EchoContent.GATE_RETURN_TARGET).isPresent();
     }
 
     private static boolean isSafe(

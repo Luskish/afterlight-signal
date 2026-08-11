@@ -8,12 +8,16 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.storage.loot.LootTable;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import org.rllabs.afterlight.Afterlight;
@@ -28,9 +32,14 @@ public final class FarRelayGameTests {
 
     private FarRelayGameTests() {}
 
-    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_revalidation",
+            timeoutTicks = 1200)
     public static void initializerBuildsEverySiteExactlyOnce(GameTestHelper helper) {
         ServerLevel relay = helper.getLevel();
+        restorePreviousTestObstruction(relay);
         helper.assertTrue(
                 relay.registryAccess()
                         .registryOrThrow(Registries.DIMENSION_TYPE)
@@ -93,21 +102,132 @@ public final class FarRelayGameTests {
                 beforeSecondInitialization,
                 "second initialization snapshot");
 
-        BlockPos markedPlayerBlock = new BlockPos(
-                RelaySite.CENTRAL.x() + PLATFORM_RADIUS,
-                centralFloor,
-                RelaySite.CENTRAL.z());
-        relay.setBlock(markedPlayerBlock, Blocks.DIAMOND_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
-        FarRelayInitializer.ensureAll(relay);
-        helper.assertValueEqual(
-                relay.getBlockState(markedPlayerBlock),
-                Blocks.DIAMOND_BLOCK.defaultBlockState(),
-                "player block at marked site");
-        relay.setBlock(
-                markedPlayerBlock,
-                EchoContent.RELAY_STONE.get().defaultBlockState(),
-                Block.UPDATE_ALL);
         relay.setBlock(outsideConstruction, originalOutsideState, Block.UPDATE_ALL);
+        helper.succeed();
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_revalidation",
+            timeoutTicks = 1200)
+    public static void markedSitesRepairReplaceableRequiredPiecesAtOriginalHeight(
+            GameTestHelper helper) {
+        ServerLevel relay = helper.getLevel();
+        restorePreviousTestObstruction(relay);
+        FarRelayInitializer.ensureAll(relay);
+        Map<RelaySite, Integer> floors = currentPlatformFloors(relay);
+
+        for (RelaySite site : RelaySite.values()) {
+            int floorY = floors.get(site);
+            relay.setBlock(
+                    new BlockPos(site.x(), floorY, site.z()),
+                    Blocks.AIR.defaultBlockState(),
+                    Block.UPDATE_ALL);
+            relay.setBlock(
+                    chestPosition(site, floorY),
+                    Blocks.AIR.defaultBlockState(),
+                    Block.UPDATE_ALL);
+        }
+        int centralFloor = floors.get(RelaySite.CENTRAL);
+        relay.setBlock(
+                new BlockPos(RelaySite.CENTRAL.x() + 3, centralFloor + 1, RelaySite.CENTRAL.z()),
+                Blocks.AIR.defaultBlockState(),
+                Block.UPDATE_ALL);
+        relay.setBlock(
+                new BlockPos(RelaySite.CENTRAL.x() - 3, centralFloor + 1, RelaySite.CENTRAL.z()),
+                Blocks.AIR.defaultBlockState(),
+                Block.UPDATE_ALL);
+
+        FarRelayInitializer.ensureAll(relay);
+
+        for (RelaySite site : RelaySite.values()) {
+            assertCompleteSite(helper, relay, site, floors.get(site));
+        }
+        helper.succeed();
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_revalidation",
+            timeoutTicks = 1200)
+    public static void markedSitePreservesPlayerObstructionAndFailsSafely(
+            GameTestHelper helper) {
+        ServerLevel relay = helper.getLevel();
+        restorePreviousTestObstruction(relay);
+        FarRelayInitializer.ensureAll(relay);
+        int centralFloor = currentPlatformFloors(relay).get(RelaySite.CENTRAL);
+        BlockPos obstruction = new BlockPos(
+                RelaySite.CENTRAL.x(), centralFloor, RelaySite.CENTRAL.z());
+        relay.setBlock(obstruction, Blocks.DIAMOND_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+
+        boolean rejected = false;
+        BlockState preserved;
+        try {
+            FarRelayInitializer.ensureAll(relay);
+        } catch (IllegalStateException expected) {
+            rejected = true;
+        } finally {
+            preserved = relay.getBlockState(obstruction);
+            relay.setBlock(
+                    obstruction,
+                    EchoContent.RELAY_STONE.get().defaultBlockState(),
+                    Block.UPDATE_ALL);
+            FarRelayInitializer.ensureAll(relay);
+        }
+
+        helper.assertTrue(rejected, "marked site obstruction did not fail safely");
+        helper.assertValueEqual(
+                preserved,
+                Blocks.DIAMOND_BLOCK.defaultBlockState(),
+                "marked site player obstruction");
+        assertCompleteSite(helper, relay, RelaySite.CENTRAL, centralFloor);
+        helper.succeed();
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_revalidation",
+            timeoutTicks = 1200)
+    public static void markedSitePreservesPlayerChestAndFailsSafely(
+            GameTestHelper helper) {
+        ServerLevel relay = helper.getLevel();
+        restorePreviousTestObstruction(relay);
+        FarRelayInitializer.ensureAll(relay);
+        int centralFloor = currentPlatformFloors(relay).get(RelaySite.CENTRAL);
+        BlockPos chestPosition = chestPosition(RelaySite.CENTRAL, centralFloor);
+        relay.setBlock(chestPosition, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        relay.setBlock(chestPosition, Blocks.CHEST.defaultBlockState(), Block.UPDATE_ALL);
+        ChestBlockEntity playerChest = (ChestBlockEntity) relay.getBlockEntity(chestPosition);
+        playerChest.setItem(0, new ItemStack(Items.DIAMOND));
+        playerChest.setChanged();
+
+        boolean rejected = false;
+        ItemStack preservedItem;
+        ResourceKey<LootTable> preservedLootTable;
+        try {
+            FarRelayInitializer.ensureAll(relay);
+        } catch (IllegalStateException expected) {
+            rejected = true;
+        } finally {
+            ChestBlockEntity preservedChest = (ChestBlockEntity) relay.getBlockEntity(chestPosition);
+            preservedItem = preservedChest.getItem(0).copy();
+            preservedLootTable = preservedChest.getLootTable();
+            relay.setBlock(chestPosition, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+            FarRelayInitializer.ensureAll(relay);
+        }
+
+        helper.assertTrue(rejected, "marked player chest did not fail safely");
+        helper.assertTrue(
+                ItemStack.isSameItemSameComponents(preservedItem, new ItemStack(Items.DIAMOND))
+                        && preservedItem.getCount() == 1,
+                "marked site player chest contents changed");
+        helper.assertTrue(
+                preservedLootTable == null,
+                "marked site player chest loot table changed");
+        assertCompleteSite(helper, relay, RelaySite.CENTRAL, centralFloor);
         helper.succeed();
     }
 
@@ -160,6 +280,34 @@ public final class FarRelayGameTests {
             }
         }
         return 72;
+    }
+
+    private static Map<RelaySite, Integer> currentPlatformFloors(ServerLevel level) {
+        Map<RelaySite, Integer> floors = new LinkedHashMap<>();
+        for (RelaySite site : RelaySite.values()) {
+            floors.put(site, expectedPlatformY(level, site.x(), site.z()));
+        }
+        return Map.copyOf(floors);
+    }
+
+    private static void restorePreviousTestObstruction(ServerLevel level) {
+        for (int distance = 0; distance <= 32; distance++) {
+            restoreDiamondCenter(level, 64 + distance);
+            if (distance > 0) {
+                restoreDiamondCenter(level, 64 - distance);
+            }
+        }
+        restoreDiamondCenter(level, 72);
+    }
+
+    private static void restoreDiamondCenter(ServerLevel level, int floorY) {
+        BlockPos center = new BlockPos(RelaySite.CENTRAL.x(), floorY, RelaySite.CENTRAL.z());
+        if (level.getBlockState(center).is(Blocks.DIAMOND_BLOCK)) {
+            level.setBlock(
+                    center,
+                    EchoContent.RELAY_STONE.get().defaultBlockState(),
+                    Block.UPDATE_ALL);
+        }
     }
 
     private static boolean isSafeSurface(ServerLevel level, int x, int y, int z) {

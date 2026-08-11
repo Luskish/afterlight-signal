@@ -1,6 +1,9 @@
 package org.rllabs.afterlight.gate;
 
 import com.mojang.authlib.GameProfile;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -23,6 +26,8 @@ import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.portal.DimensionTransition;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -35,6 +40,8 @@ import org.rllabs.afterlight.EchoContent;
 import org.rllabs.afterlight.gate.GateActivationService.ActivationDecision;
 import org.rllabs.afterlight.relay.FarRelayInitializer;
 import org.rllabs.afterlight.relay.FarRelayKeys;
+import org.rllabs.afterlight.relay.FarRelaySavedData;
+import org.rllabs.afterlight.relay.RelaySite;
 
 @GameTestHolder(Afterlight.MOD_ID)
 @PrefixGameTestTemplate(false)
@@ -61,15 +68,28 @@ public final class GateTravelGameTests {
             throw new IllegalStateException("Dedicated server did not create afterlight:far_relay");
         }
         var chunk = relay.getChunk(0, 0);
+        FarRelaySavedData data = FarRelaySavedData.get(relay);
+        int existingSites = data.initializedSites().size();
+        if (existingSites != 0) {
+            throw new IllegalStateException(
+                    "Dedicated acceptance reused initialized world state: " + existingSites);
+        }
+        System.out.println(
+                "AFTERLIGHT DEDICATED FRESH WORLD: OK existing_sites=" + existingSites);
         FarRelayInitializer.ensureAll(relay);
-        int initializedSites = org.rllabs.afterlight.relay.FarRelaySavedData.get(relay)
-                .initializedSites()
-                .size();
+        int initializedSites = data.initializedSites().size();
         BlockPos arrival = FarRelayInitializer.centralArrival(relay).orElseThrow(
                 () -> new IllegalStateException("Dedicated Far Relay central arrival is unavailable"));
-        if (initializedSites != org.rllabs.afterlight.relay.RelaySite.values().length) {
+        if (initializedSites != RelaySite.values().length) {
             throw new IllegalStateException(
                     "Dedicated Far Relay initialized " + initializedSites + " sites");
+        }
+        int physicalSites = 0;
+        for (RelaySite site : RelaySite.values()) {
+            int platformY = data.platformY(site).orElseThrow(() -> new IllegalStateException(
+                    "Dedicated Far Relay platform height is unavailable: " + site));
+            verifyPhysicalSite(relay, site, platformY);
+            physicalSites++;
         }
         System.out.println(
                 "AFTERLIGHT DEDICATED CUSTOM LEVEL ACCEPTANCE: OK level="
@@ -78,9 +98,59 @@ public final class GateTravelGameTests {
                         + chunk.getPos()
                         + " sites="
                         + initializedSites
+                        + " physical_sites="
+                        + physicalSites
                         + " arrival="
                         + arrival);
+        writeDedicatedAcceptanceMarker();
         server.halt(false);
+    }
+
+    private static void writeDedicatedAcceptanceMarker() {
+        String marker = System.getProperty("afterlight.dedicated.acceptance.marker");
+        if (marker == null || marker.isBlank()) {
+            throw new IllegalStateException("Dedicated acceptance marker path is unavailable");
+        }
+        try {
+            Files.writeString(Path.of(marker), "ok\n");
+        } catch (IOException exception) {
+            throw new IllegalStateException("Dedicated acceptance marker could not be written", exception);
+        }
+    }
+
+    private static void verifyPhysicalSite(
+            ServerLevel relay, RelaySite site, int platformY) {
+        for (int deltaX = -5; deltaX <= 5; deltaX++) {
+            for (int deltaZ = -5; deltaZ <= 5; deltaZ++) {
+                BlockPos floor = new BlockPos(
+                        site.x() + deltaX, platformY, site.z() + deltaZ);
+                if (!relay.getBlockState(floor).is(EchoContent.RELAY_STONE.get())) {
+                    throw new IllegalStateException(
+                            "Dedicated Far Relay platform is incomplete: " + site + " at " + floor);
+                }
+            }
+        }
+        BlockPos center = new BlockPos(site.x(), platformY + 1, site.z());
+        if (!relay.getBlockState(center).isAir()
+                || !relay.getBlockState(center.above()).isAir()) {
+            throw new IllegalStateException(
+                    "Dedicated Far Relay safe arrival is blocked: " + site);
+        }
+        BlockPos chestPosition = new BlockPos(site.x(), platformY + 1, site.z() + 3);
+        BlockEntity blockEntity = relay.getBlockEntity(chestPosition);
+        if (!(blockEntity instanceof ChestBlockEntity chest)
+                || chest.getLootTable() != FarRelayKeys.LOOT_TABLE) {
+            throw new IllegalStateException(
+                    "Dedicated Far Relay loot marker is incomplete: " + site);
+        }
+        if (site == RelaySite.CENTRAL
+                && (!relay.getBlockState(new BlockPos(site.x() + 3, platformY + 1, site.z()))
+                                .is(EchoContent.RETURN_TERMINAL.get())
+                        || !relay.getBlockState(new BlockPos(
+                                        site.x() - 3, platformY + 1, site.z()))
+                                .is(EchoContent.FUTURE_CONSOLE.get()))) {
+            throw new IllegalStateException("Dedicated Far Relay central markers are incomplete");
+        }
     }
 
     @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
@@ -137,6 +207,87 @@ public final class GateTravelGameTests {
                 player.getData(EchoContent.GATE_RETURN_TARGET),
                 "duplicate collision target");
         removePlayer(helper, player);
+        helper.succeed();
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void activeReturnTargetSurvivesOutboundAfterLimiterExpires(
+            GameTestHelper helper) {
+        ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        BlockPos controller = helper.absolutePos(CONTROLLER);
+        GateTravelService.TravelResult first = GateTravelService.INSTANCE.travelToFarRelay(
+                player, controller, helper.getLevel());
+        GateReturnTarget original = player.getData(EchoContent.GATE_RETURN_TARGET);
+
+        helper.assertValueEqual(first, GateTravelService.TravelResult.SUCCESS, "first outbound");
+        helper.runAfterDelay(21L, () -> {
+            GateTravelService.TravelResult nested = GateTravelService.INSTANCE.travelToFarRelay(
+                    player, controller.offset(20, 0, 0), helper.getLevel());
+
+            helper.assertFalse(
+                    nested == GateTravelService.TravelResult.SUCCESS,
+                    "nested outbound succeeded after rate limit expired");
+            helper.assertValueEqual(
+                    player.getData(EchoContent.GATE_RETURN_TARGET),
+                    original,
+                    "active return target after limiter expiry");
+            removePlayer(helper, player);
+            helper.succeed();
+        });
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void failedNestedOutboundPreservesOriginalRoute(GameTestHelper helper) {
+        FailingTransferPlayer player = new FailingTransferPlayer(helper.getLevel());
+        GateReturnTarget original = new GateReturnTarget(
+                Level.OVERWORLD, new BlockPos(12, 80, -44), 62.0F, -7.0F);
+        player.setData(EchoContent.GATE_RETURN_TARGET, original);
+
+        GateTravelService.TravelResult nested = GateTravelService.INSTANCE.travelToFarRelay(
+                player, helper.absolutePos(CONTROLLER), helper.getLevel());
+
+        helper.assertFalse(
+                nested == GateTravelService.TravelResult.SUCCESS,
+                "nested outbound reported success");
+        helper.assertValueEqual(player.changeDimensionAttempts(), 0, "nested transfer attempts");
+        helper.assertValueEqual(
+                player.getData(EchoContent.GATE_RETURN_TARGET),
+                original,
+                "original route after failed nested outbound");
+        helper.succeed();
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void failedFirstOutboundLeavesNoStaleRoute(GameTestHelper helper) {
+        FailingTransferPlayer player = new FailingTransferPlayer(helper.getLevel());
+
+        GateTravelService.TravelResult result = GateTravelService.INSTANCE.travelToFarRelay(
+                player, helper.absolutePos(CONTROLLER), helper.getLevel());
+
+        helper.assertValueEqual(
+                result,
+                GateTravelService.TravelResult.TRANSFER_FAILED,
+                "failed first outbound result");
+        helper.assertTrue(
+                player.getExistingData(EchoContent.GATE_RETURN_TARGET).isEmpty(),
+                "failed first outbound retained a stale route");
+        helper.succeed();
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void exceptionalFirstOutboundLeavesNoStaleRoute(GameTestHelper helper) {
+        ThrowingTransferPlayer player = new ThrowingTransferPlayer(helper.getLevel());
+
+        GateTravelService.TravelResult result = GateTravelService.INSTANCE.travelToFarRelay(
+                player, helper.absolutePos(CONTROLLER), helper.getLevel());
+
+        helper.assertValueEqual(
+                result,
+                GateTravelService.TravelResult.TRANSFER_FAILED,
+                "exceptional first outbound result");
+        helper.assertTrue(
+                player.getExistingData(EchoContent.GATE_RETURN_TARGET).isEmpty(),
+                "exceptional first outbound retained a stale route");
         helper.succeed();
     }
 
@@ -458,6 +609,8 @@ public final class GateTravelGameTests {
     }
 
     private static final class FailingTransferPlayer extends ServerPlayer {
+        private int changeDimensionAttempts;
+
         private FailingTransferPlayer(ServerLevel level) {
             super(
                     level.getServer(),
@@ -468,7 +621,27 @@ public final class GateTravelGameTests {
 
         @Override
         public Entity changeDimension(DimensionTransition transition) {
+            changeDimensionAttempts++;
             return null;
+        }
+
+        private int changeDimensionAttempts() {
+            return changeDimensionAttempts;
+        }
+    }
+
+    private static final class ThrowingTransferPlayer extends ServerPlayer {
+        private ThrowingTransferPlayer(ServerLevel level) {
+            super(
+                    level.getServer(),
+                    level,
+                    new GameProfile(UUID.randomUUID(), "travel-throwing-player"),
+                    ClientInformation.createDefault());
+        }
+
+        @Override
+        public Entity changeDimension(DimensionTransition transition) {
+            throw new IllegalStateException("test transfer failure");
         }
     }
 }
