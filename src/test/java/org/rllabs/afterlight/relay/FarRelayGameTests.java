@@ -8,7 +8,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
-import net.minecraft.resources.ResourceKey;
+import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
@@ -17,7 +17,6 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.world.level.storage.loot.LootTable;
 import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import org.rllabs.afterlight.Afterlight;
@@ -152,6 +151,47 @@ public final class FarRelayGameTests {
             template = TEMPLATE,
             batch = "afterlight_far_relay_revalidation",
             timeoutTicks = 1200)
+    public static void fullyMissingLegacyMarkedSiteRecoversAtFallbackHeight(
+            GameTestHelper helper) {
+        ServerLevel relay = helper.getLevel();
+        restorePreviousTestObstruction(relay);
+        FarRelayInitializer.ensureAll(relay);
+        FarRelaySavedData originalData = FarRelaySavedData.get(relay);
+        CompoundTag legacyTag = originalData.save(new CompoundTag(), relay.registryAccess());
+        legacyTag.getCompound("platform_heights").remove(RelaySite.NORTH.name());
+        FarRelaySavedData legacyData = FarRelaySavedData.load(legacyTag, relay.registryAccess());
+        relay.getDataStorage().set("afterlight_far_relay", legacyData);
+        clearSiteSearchVolume(relay, RelaySite.NORTH);
+
+        RuntimeException failure = null;
+        try {
+            FarRelayInitializer.ensureAll(relay);
+        } catch (RuntimeException exception) {
+            failure = exception;
+        } finally {
+            if (failure != null) {
+                relay.getDataStorage().set("afterlight_far_relay", originalData);
+                FarRelayInitializer.ensureAll(relay);
+            }
+        }
+
+        helper.assertTrue(
+                failure == null,
+                "fully missing legacy marked site did not recover: " + failure);
+        FarRelaySavedData recoveredData = FarRelaySavedData.get(relay);
+        helper.assertValueEqual(
+                recoveredData.platformY(RelaySite.NORTH).orElseThrow(),
+                72,
+                "recovered legacy platform height");
+        assertCompleteSite(helper, relay, RelaySite.NORTH, 72);
+        helper.succeed();
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_revalidation",
+            timeoutTicks = 1200)
     public static void markedSitePreservesPlayerObstructionAndFailsSafely(
             GameTestHelper helper) {
         ServerLevel relay = helper.getLevel();
@@ -191,7 +231,7 @@ public final class FarRelayGameTests {
             template = TEMPLATE,
             batch = "afterlight_far_relay_revalidation",
             timeoutTicks = 1200)
-    public static void markedSitePreservesPlayerChestAndFailsSafely(
+    public static void markedSitePreservesExistingChestContentsAndMetadata(
             GameTestHelper helper) {
         ServerLevel relay = helper.getLevel();
         restorePreviousTestObstruction(relay);
@@ -203,31 +243,73 @@ public final class FarRelayGameTests {
         ChestBlockEntity playerChest = (ChestBlockEntity) relay.getBlockEntity(chestPosition);
         playerChest.setItem(0, new ItemStack(Items.DIAMOND));
         playerChest.setChanged();
+        CompoundTag before = playerChest.saveWithFullMetadata(relay.registryAccess());
 
-        boolean rejected = false;
-        ItemStack preservedItem;
-        ResourceKey<LootTable> preservedLootTable;
+        RuntimeException failure = null;
         try {
             FarRelayInitializer.ensureAll(relay);
-        } catch (IllegalStateException expected) {
-            rejected = true;
-        } finally {
-            ChestBlockEntity preservedChest = (ChestBlockEntity) relay.getBlockEntity(chestPosition);
-            preservedItem = preservedChest.getItem(0).copy();
-            preservedLootTable = preservedChest.getLootTable();
-            relay.setBlock(chestPosition, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
-            FarRelayInitializer.ensureAll(relay);
+        } catch (RuntimeException exception) {
+            failure = exception;
         }
+        ChestBlockEntity preservedChest = (ChestBlockEntity) relay.getBlockEntity(chestPosition);
+        CompoundTag after = preservedChest.saveWithFullMetadata(relay.registryAccess());
+        relay.setBlock(chestPosition, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        FarRelayInitializer.ensureAll(relay);
 
-        helper.assertTrue(rejected, "marked player chest did not fail safely");
         helper.assertTrue(
-                ItemStack.isSameItemSameComponents(preservedItem, new ItemStack(Items.DIAMOND))
-                        && preservedItem.getCount() == 1,
-                "marked site player chest contents changed");
-        helper.assertTrue(
-                preservedLootTable == null,
-                "marked site player chest loot table changed");
+                failure == null,
+                "valid existing marked chest was rejected: " + failure);
+        helper.assertValueEqual(after, before, "existing marked chest metadata");
         assertCompleteSite(helper, relay, RelaySite.CENTRAL, centralFloor);
+        helper.succeed();
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_revalidation",
+            timeoutTicks = 1200)
+    public static void consumedMarkedLootChestRemainsValidAndUnchanged(
+            GameTestHelper helper) {
+        ServerLevel relay = helper.getLevel();
+        restorePreviousTestObstruction(relay);
+        FarRelayInitializer.ensureAll(relay);
+        int floorY = FarRelaySavedData.get(relay)
+                .platformY(RelaySite.SOUTH)
+                .orElseThrow();
+        BlockPos chestPosition = chestPosition(RelaySite.SOUTH, floorY);
+        ChestBlockEntity chest = (ChestBlockEntity) relay.getBlockEntity(chestPosition);
+        helper.assertValueEqual(
+                chest.getLootTable(),
+                FarRelayKeys.LOOT_TABLE,
+                "generated chest pending loot table");
+        long generatedSeed = chest.getLootTableSeed();
+        chest.getItem(0);
+        chest.clearContent();
+        chest.setChanged();
+        helper.assertTrue(chest.getLootTable() == null, "consumed chest retained pending loot");
+        CompoundTag before = chest.saveWithFullMetadata(relay.registryAccess());
+
+        RuntimeException failure = null;
+        try {
+            FarRelayInitializer.ensureAll(relay);
+        } catch (RuntimeException exception) {
+            failure = exception;
+        }
+        ChestBlockEntity afterChest =
+                (ChestBlockEntity) relay.getBlockEntity(chestPosition);
+        CompoundTag after = afterChest.saveWithFullMetadata(relay.registryAccess());
+        boolean remainedEmpty = afterChest.isEmpty();
+        afterChest.setLootTable(FarRelayKeys.LOOT_TABLE);
+        afterChest.setLootTableSeed(generatedSeed);
+        afterChest.setChanged();
+        FarRelayInitializer.ensureAll(relay);
+
+        helper.assertTrue(
+                failure == null,
+                "consumed marked loot chest was rejected: " + failure);
+        helper.assertValueEqual(after, before, "consumed chest metadata");
+        helper.assertTrue(remainedEmpty, "consumed chest loot was duplicated");
         helper.succeed();
     }
 
@@ -298,6 +380,19 @@ public final class FarRelayGameTests {
             }
         }
         restoreDiamondCenter(level, 72);
+    }
+
+    private static void clearSiteSearchVolume(ServerLevel level, RelaySite site) {
+        for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
+            for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
+                for (int y = 32; y <= 98; y++) {
+                    level.setBlock(
+                            new BlockPos(site.x() + deltaX, y, site.z() + deltaZ),
+                            Blocks.AIR.defaultBlockState(),
+                            Block.UPDATE_ALL);
+                }
+            }
+        }
     }
 
     private static void restoreDiamondCenter(ServerLevel level, int floorY) {

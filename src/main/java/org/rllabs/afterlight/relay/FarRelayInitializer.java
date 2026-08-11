@@ -51,10 +51,9 @@ public final class FarRelayInitializer {
         loadConstructionChunks(level, site);
         if (data.isInitialized(site)) {
             int platformY = data.platformY(site).orElseGet(() -> rediscoverPlatformY(level, site)
-                    .orElseThrow(() -> new IllegalStateException(
-                            "Far Relay marked site height unavailable: " + site)));
+                    .orElseGet(() -> findPlatformY(level, site)));
             repairMarkedSite(level, site, platformY);
-            if (!isComplete(level, site, platformY)) {
+            if (!isComplete(level, site, platformY, false)) {
                 throw new IllegalStateException(
                         "Far Relay marked site repair blocked: "
                                 + site
@@ -73,7 +72,7 @@ public final class FarRelayInitializer {
         if (site == RelaySite.CENTRAL) {
             placeCentralBlocks(level, site, platformY);
         }
-        if (!isComplete(level, site, platformY)) {
+        if (!isComplete(level, site, platformY, true)) {
             throw new IllegalStateException("Far Relay site initialization incomplete: " + site);
         }
         data.markInitialized(site, platformY);
@@ -309,7 +308,11 @@ public final class FarRelayInitializer {
                 Block.UPDATE_ALL);
     }
 
-    private static boolean isComplete(ServerLevel level, RelaySite site, int platformY) {
+    private static boolean isComplete(
+            ServerLevel level,
+            RelaySite site,
+            int platformY,
+            boolean requirePendingLoot) {
         for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
             for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
                 BlockPos floor = new BlockPos(
@@ -330,7 +333,7 @@ public final class FarRelayInitializer {
 
         BlockEntity blockEntity = level.getBlockEntity(chestPosition(site, platformY));
         if (!(blockEntity instanceof ChestBlockEntity chest)
-                || chest.getLootTable() != FarRelayKeys.LOOT_TABLE) {
+                || requirePendingLoot && chest.getLootTable() != FarRelayKeys.LOOT_TABLE) {
             return false;
         }
         if (site != RelaySite.CENTRAL) {
@@ -367,9 +370,6 @@ public final class FarRelayInitializer {
         if (!(blockEntity instanceof ChestBlockEntity chest)) {
             return "chest=" + chestPosition(site, platformY) + " state="
                     + level.getBlockState(chestPosition(site, platformY));
-        }
-        if (chest.getLootTable() != FarRelayKeys.LOOT_TABLE) {
-            return "loot_table=" + chest.getLootTable();
         }
         if (site == RelaySite.CENTRAL
                 && !level.getBlockState(new BlockPos(site.x() + 3, platformY + 1, site.z()))
