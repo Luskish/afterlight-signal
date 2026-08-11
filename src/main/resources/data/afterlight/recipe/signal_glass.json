@@ -1,0 +1,30 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "building",
+  "neoforge:conditions": [
+    {
+      "type": "neoforge:mod_loaded",
+      "modid": "ae2"
+    }
+  ],
+  "pattern": [
+    "TFT",
+    "FEF",
+    "TFT"
+  ],
+  "key": {
+    "T": {
+      "item": "minecraft:tinted_glass"
+    },
+    "F": {
+      "item": "ae2:fluix_crystal"
+    },
+    "E": {
+      "item": "minecraft:echo_shard"
+    }
+  },
+  "result": {
+    "id": "afterlight:signal_glass",
+    "count": 2
+  }
+}
