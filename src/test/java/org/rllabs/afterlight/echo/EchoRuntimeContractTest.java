@@ -28,6 +28,9 @@ import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.gametest.framework.GameTest;
+import net.minecraft.gametest.framework.GameTestBatch;
+import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
@@ -220,6 +223,29 @@ class EchoRuntimeContractTest {
         assertEquals(
                 "java.lang.ref.WeakReference<net.minecraft.server.level.ServerPlayer>",
                 sessionField.getGenericType().getTypeName());
+    }
+
+    @Test
+    void manualTickGameTestsUseDistinctSerialBatches() throws Exception {
+        List<String> batchNames = List.of(
+                EchoGameTests.class
+                        .getMethod("firstLoginIssuesEcho", GameTestHelper.class)
+                        .getAnnotation(GameTest.class)
+                        .batch(),
+                EchoGameTests.class
+                        .getMethod("logoutCancelsPendingIssue", GameTestHelper.class)
+                        .getAnnotation(GameTest.class)
+                        .batch(),
+                EchoGameTests.class
+                        .getMethod("reconnectDelayResets", GameTestHelper.class)
+                        .getAnnotation(GameTest.class)
+                        .batch());
+
+        assertFalse(batchNames.stream().anyMatch(String::isBlank), "manual tick batch names must be nonblank");
+        assertFalse(
+                batchNames.stream().anyMatch(GameTestBatch.DEFAULT_BATCH_NAME::equals),
+                "manual tick GameTests must not use the default batch");
+        assertEquals(3, Set.copyOf(batchNames).size(), "manual tick GameTests must use distinct batches");
     }
 
     @Test

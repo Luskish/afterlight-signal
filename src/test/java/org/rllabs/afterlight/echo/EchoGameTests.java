@@ -49,7 +49,11 @@ public final class EchoGameTests {
     private EchoGameTests() {
     }
 
-    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 40)
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_echo_first_login",
+            timeoutTicks = 40)
     public static void firstLoginIssuesEcho(GameTestHelper helper) {
         ServerPlayer player = helper.makeMockServerPlayerInLevel();
 
@@ -80,7 +84,11 @@ public final class EchoGameTests {
         });
     }
 
-    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 40)
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_echo_logout",
+            timeoutTicks = 40)
     public static void logoutCancelsPendingIssue(GameTestHelper helper) {
         ServerPlayer player = helper.makeMockServerPlayerInLevel();
         MinecraftServer server = helper.getLevel().getServer();
@@ -97,7 +105,11 @@ public final class EchoGameTests {
         });
     }
 
-    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 50)
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_echo_reconnect",
+            timeoutTicks = 50)
     public static void reconnectDelayResets(GameTestHelper helper) {
         ServerPlayer sessionA = helper.makeMockServerPlayerInLevel();
         MinecraftServer server = helper.getLevel().getServer();
