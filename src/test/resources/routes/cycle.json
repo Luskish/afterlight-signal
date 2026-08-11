@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "terminal_quest": "03",
+  "segments": [
+    {
+      "id": "root",
+      "after": [],
+      "quests": ["01"]
+    },
+    {
+      "id": "memory_a",
+      "after": ["memory_b"],
+      "quests": ["02"]
+    },
+    {
+      "id": "memory_b",
+      "after": ["memory_a"],
+      "quests": ["03"]
+    }
+  ]
+}

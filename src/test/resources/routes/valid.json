@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "terminal_quest": "31C9557D2F51238F",
+  "segments": [
+    {
+      "id": "cold_boot",
+      "after": [],
+      "quests": ["01", "8000000000000000"]
+    },
+    {
+      "id": "memory_trace",
+      "after": ["cold_boot"],
+      "quests": ["FFFFFFFFFFFFFFFF", "31C9557D2F51238F"]
+    }
+  ]
+}

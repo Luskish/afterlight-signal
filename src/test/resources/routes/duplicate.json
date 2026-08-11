@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "terminal_quest": "02",
+  "segments": [
+    {
+      "id": "cold_boot",
+      "after": [],
+      "quests": ["01", "01"]
+    },
+    {
+      "id": "cold_boot",
+      "after": [],
+      "quests": ["02"]
+    }
+  ]
+}
