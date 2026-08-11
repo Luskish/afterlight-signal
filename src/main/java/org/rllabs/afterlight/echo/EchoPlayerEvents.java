@@ -1,5 +1,6 @@
 package org.rllabs.afterlight.echo;
 
+import java.lang.ref.WeakReference;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.Map;
@@ -29,7 +30,7 @@ public final class EchoPlayerEvents {
         }
         PENDING_FIRST_ISSUES
                 .computeIfAbsent(server, ignored -> new HashMap<>())
-                .put(player.getUUID(), new PendingFirstIssue(player, server.getTickCount() + 1));
+                .put(player.getUUID(), new PendingFirstIssue(new WeakReference<>(player), server.getTickCount() + 1));
     }
 
     public static void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
@@ -43,7 +44,10 @@ public final class EchoPlayerEvents {
         }
         pending.computeIfPresent(
                 player.getUUID(),
-                (ignored, issue) -> issue.player() == player ? null : issue);
+                (ignored, issue) -> {
+                    ServerPlayer pendingPlayer = issue.session().get();
+                    return pendingPlayer == null || pendingPlayer == player ? null : issue;
+                });
         removeEmptyServerEntry(server, pending);
     }
 
@@ -58,12 +62,17 @@ public final class EchoPlayerEvents {
         while (iterator.hasNext()) {
             Map.Entry<UUID, PendingFirstIssue> entry = iterator.next();
             PendingFirstIssue issue = entry.getValue();
+            ServerPlayer pendingPlayer = issue.session().get();
+            if (pendingPlayer == null) {
+                iterator.remove();
+                continue;
+            }
             if (server.getTickCount() < issue.dueTick()) {
                 continue;
             }
             iterator.remove();
             ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
-            if (player != issue.player()) {
+            if (player != pendingPlayer) {
                 continue;
             }
             EchoBond bond = player.getExistingData(EchoContent.ECHO_BOND).orElse(EchoBond.UNISSUED);
@@ -92,6 +101,6 @@ public final class EchoPlayerEvents {
         }
     }
 
-    private record PendingFirstIssue(ServerPlayer player, int dueTick) {
+    private record PendingFirstIssue(WeakReference<ServerPlayer> session, int dueTick) {
     }
 }

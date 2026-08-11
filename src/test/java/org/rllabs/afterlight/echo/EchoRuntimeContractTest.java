@@ -13,10 +13,13 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.netty.buffer.Unpooled;
 import java.io.InputStream;
+import java.lang.ref.WeakReference;
+import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -30,6 +33,7 @@ import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Rarity;
@@ -192,6 +196,30 @@ class EchoRuntimeContractTest {
         assertNotNull(EchoPlayerEvents.class.getMethod(
                 "onPlayerLoggedOut", PlayerEvent.PlayerLoggedOutEvent.class));
         assertTrue(classBytes(Afterlight.class).contains("onPlayerLoggedOut"));
+    }
+
+    @Test
+    void pendingIssueRetainsSessionOnlyThroughWeakReference() {
+        Class<?> pendingType = Arrays.stream(EchoPlayerEvents.class.getDeclaredClasses())
+                .filter(type -> type.getSimpleName().equals("PendingFirstIssue"))
+                .findFirst()
+                .orElseThrow();
+        List<Field> instanceFields = Arrays.stream(pendingType.getDeclaredFields())
+                .filter(field -> !Modifier.isStatic(field.getModifiers()))
+                .toList();
+
+        assertFalse(
+                instanceFields.stream().anyMatch(field -> ServerPlayer.class.isAssignableFrom(field.getType())),
+                "pending issue has strong ServerPlayer field");
+        Field sessionField = instanceFields.stream()
+                .filter(field -> field.getType() == WeakReference.class)
+                .findFirst()
+                .orElse(null);
+        assertNotNull(sessionField, "pending issue has no weak session reference");
+        assertEquals("session", sessionField.getName());
+        assertEquals(
+                "java.lang.ref.WeakReference<net.minecraft.server.level.ServerPlayer>",
+                sessionField.getGenericType().getTypeName());
     }
 
     @Test
