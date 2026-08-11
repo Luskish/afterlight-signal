@@ -59,6 +59,12 @@ dependencyLocking {
     lockAllConfigurations()
 }
 
+configurations.configureEach {
+    if (name == 'neoFormRuntimeDependenciesRuntimeClasspath') {
+        resolutionStrategy.deactivateDependencyLocking()
+    }
+}
+
 def releasePolicy = file('tools/ReleaseSourcePolicy.java')
 def policyJava = file("${System.getProperty('java.home')}/bin/java")
 def sourceCommit = providers.exec {

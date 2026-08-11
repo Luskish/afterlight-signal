@@ -37,14 +37,22 @@ import java.util.jar.Manifest;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
+import javax.xml.parsers.DocumentBuilderFactory;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.TypeReference;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
 
 class ReleaseJarContractTest {
+    private static final String CROSS_REPOSITORY_ORIGIN =
+            "Authenticated from NeoForged Releases and Maven Central";
+    private static final String MOJANG_CHECKSUM_ORIGIN =
+            "Authenticated from Mojang Libraries published SHA-256";
     private static final byte[] DIGEST_DOMAIN =
             "AFTERLIGHT_RELEASE_SOURCE_TREE_V2\0".getBytes(StandardCharsets.UTF_8);
     private static final Path ROOT = Path.of(
@@ -281,19 +289,163 @@ class ReleaseJarContractTest {
 
     @Test
     void dependencyVerificationCoversColdNeoFormJunitBomMetadata() throws Exception {
-        String metadata = Files.readString(ROOT.resolve("gradle/verification-metadata.xml"));
+        Document metadata = verificationMetadata();
         assertVerificationArtifact(
                 metadata,
+                "org.junit",
+                "junit-bom",
+                "5.9.3",
                 "junit-bom-5.9.3.module",
-                "b401fd25901e582a524aa5343c4b39e28bc56e24961c1069bf2b4bbfcee46b93");
+                "b401fd25901e582a524aa5343c4b39e28bc56e24961c1069bf2b4bbfcee46b93",
+                CROSS_REPOSITORY_ORIGIN);
         assertVerificationArtifact(
                 metadata,
+                "org.junit",
+                "junit-bom",
+                "5.10.0",
                 "junit-bom-5.10.0.module",
-                "eb3ee6127608010694a898056e7407d117296003aba5f5db801df430b9887fcf");
+                "eb3ee6127608010694a898056e7407d117296003aba5f5db801df430b9887fcf",
+                CROSS_REPOSITORY_ORIGIN);
         assertVerificationArtifact(
                 metadata,
+                "org.junit",
+                "junit-bom",
+                "5.10.1",
                 "junit-bom-5.10.1.module",
-                "21b0afcfffe2ecb3770f5eb00ae7a19feaee94e771fa3918173850dae78067b7");
+                "21b0afcfffe2ecb3770f5eb00ae7a19feaee94e771fa3918173850dae78067b7",
+                CROSS_REPOSITORY_ORIGIN);
+    }
+
+    @Test
+    void dependencyVerificationCoversUnlockedNeoFormRuntimeMetadata() throws Exception {
+        Document metadata = verificationMetadata();
+        assertVerificationArtifact(
+                metadata,
+                "org.apache",
+                "apache",
+                "23",
+                "apache-23.pom",
+                "bc10624e0623f36577fac5639ca2936d3240ed152fb6d8d533ab4d270543491c",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "commons-io",
+                "commons-io",
+                "2.11.0",
+                "commons-io-2.11.0.pom",
+                "2e016fd7e3244b5f2c20acad834d93aa4790486ee1e4564641361a3e831eef59",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "org.apache.commons",
+                "commons-parent",
+                "52",
+                "commons-parent-52.pom",
+                "75dbe8f34e98e4c3ff42daae4a2f9eb4cbcd3b5f1047d54460ace906dbb4502e",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "com.google.code.gson",
+                "gson",
+                "2.10",
+                "gson-2.10.pom",
+                "ac69d9f254260caeab3998eaad60f355599c25121e195156bfdffc8a355fc6bd",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "com.google.code.gson",
+                "gson-parent",
+                "2.10",
+                "gson-parent-2.10.pom",
+                "fb53ac0b06c19116ca61ac344b4dfe8a7c29cc4f81b353ce889493a5039004fb",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "com.google.guava",
+                "guava",
+                "31.1-jre",
+                "guava-31.1-jre.pom",
+                "9193d07bf4f660108d7358e58b27d21b44e34e80d6734e98e21916376f270de2",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "com.google.guava",
+                "guava-parent",
+                "31.1-jre",
+                "guava-parent-31.1-jre.pom",
+                "4439626783b44ad25ef05ff07621dd4bb796cc4eb4f2966a4a461fea4130e0fc",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "org.junit",
+                "junit-bom",
+                "5.7.2",
+                "junit-bom-5.7.2.module",
+                "f3bceb1c59dd4f6993f4304dffa580172b8df65a76cd36fa4fd92c0578d28ad8",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "org.junit",
+                "junit-bom",
+                "5.7.2",
+                "junit-bom-5.7.2.pom",
+                "cd14aaa869991f82021c585d570d31ff342bcba58bb44233b70193771b96487b",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "org.junit",
+                "junit-bom",
+                "5.10.2",
+                "junit-bom-5.10.2.module",
+                "de23b114b3e4119a8fe6eb17bed5a3852816698bace67071579d6d927ebb080a",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "org.junit",
+                "junit-bom",
+                "5.10.2",
+                "junit-bom-5.10.2.pom",
+                "169dd904a4b0f6520cffe658cc62292bfe9f3c14a989fa92120724cde43a9968",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "org.junit",
+                "junit-bom",
+                "5.11.4",
+                "junit-bom-5.11.4.pom",
+                "19d4b747b204805325b6334553296f986562277a4ac1cb5e593a5e4c4f5e4115",
+                CROSS_REPOSITORY_ORIGIN);
+        assertVerificationArtifact(
+                metadata,
+                "com.mojang",
+                "logging",
+                "1.1.1",
+                "logging-1.1.1.module",
+                "d24d0f25ce70e7187c4d63dfe5ae36261e06420449c023137c97a4f2cbb2a440",
+                MOJANG_CHECKSUM_ORIGIN);
+    }
+
+    @Test
+    void platformSpecificNeoFormRuntimeIsExcludedFromCentralLockState() throws Exception {
+        String build = Files.readString(ROOT.resolve("build.gradle"));
+        String exemption = """
+                configurations.configureEach {
+                    if (name == 'neoFormRuntimeDependenciesRuntimeClasspath') {
+                        resolutionStrategy.deactivateDependencyLocking()
+                    }
+                }
+                """.strip();
+
+        assertTrue(build.contains("dependencyLocking {\n    lockAllConfigurations()\n}"));
+        assertTrue(build.contains(exemption));
+        assertEquals(
+                1,
+                build.lines()
+                        .filter(line -> line.contains("resolutionStrategy.deactivateDependencyLocking()"))
+                        .count());
+
+        String lockState = Files.readString(ROOT.resolve("gradle.lockfile"));
+        assertFalse(lockState.contains("neoFormRuntimeDependenciesRuntimeClasspath"));
     }
 
     @Test
@@ -336,15 +488,64 @@ class ReleaseJarContractTest {
         }
     }
 
-    private static void assertVerificationArtifact(String metadata, String artifact, String sha256) {
-        String opening = "<artifact name=\"" + artifact + "\">";
-        int start = metadata.indexOf(opening);
-        assertTrue(start >= 0, "missing verification artifact: " + artifact);
-        int end = metadata.indexOf("</artifact>", start);
-        assertTrue(end > start, "unterminated verification artifact: " + artifact);
-        assertTrue(
-                metadata.substring(start, end).contains("<sha256 value=\"" + sha256 + "\""),
-                "wrong verification hash: " + artifact);
+    private static Document verificationMetadata() throws Exception {
+        var factory = DocumentBuilderFactory.newDefaultInstance();
+        factory.setNamespaceAware(true);
+        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+        factory.setXIncludeAware(false);
+        factory.setExpandEntityReferences(false);
+        return factory.newDocumentBuilder()
+                .parse(ROOT.resolve("gradle/verification-metadata.xml").toFile());
+    }
+
+    private static void assertVerificationArtifact(
+            Document metadata,
+            String group,
+            String name,
+            String version,
+            String artifactName,
+            String sha256,
+            String origin) {
+        List<Element> components = elements(metadata.getElementsByTagNameNS("*", "component"));
+        List<Element> matchingComponents = components.stream()
+                .filter(component -> component.getAttribute("group").equals(group))
+                .filter(component -> component.getAttribute("name").equals(name))
+                .filter(component -> component.getAttribute("version").equals(version))
+                .toList();
+        assertEquals(
+                1,
+                matchingComponents.size(),
+                "wrong component count for " + group + ":" + name + ":" + version);
+
+        List<Element> artifacts = childElements(matchingComponents.getFirst(), "artifact").stream()
+                .filter(artifact -> artifact.getAttribute("name").equals(artifactName))
+                .toList();
+        assertEquals(1, artifacts.size(), "wrong artifact count for " + artifactName);
+
+        List<Element> hashes = childElements(artifacts.getFirst(), "sha256");
+        assertEquals(1, hashes.size(), "wrong SHA-256 count for " + artifactName);
+        assertEquals(sha256, hashes.getFirst().getAttribute("value"));
+        assertEquals(origin, hashes.getFirst().getAttribute("origin"));
+    }
+
+    private static List<Element> elements(org.w3c.dom.NodeList nodes) {
+        List<Element> elements = new ArrayList<>();
+        for (int index = 0; index < nodes.getLength(); index++) {
+            if (nodes.item(index) instanceof Element element) {
+                elements.add(element);
+            }
+        }
+        return elements;
+    }
+
+    private static List<Element> childElements(Element parent, String localName) {
+        List<Element> children = new ArrayList<>();
+        for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling()) {
+            if (child instanceof Element element && element.getLocalName().equals(localName)) {
+                children.add(element);
+            }
+        }
+        return children;
     }
 
     @Test
