@@ -102,6 +102,22 @@ public record EchoScreenLayout(
                 && y + lineHeight <= clip.bottom();
     }
 
+    public int detailFirstLineY(Rect pane) {
+        Objects.requireNonNull(pane);
+        return pane.y() + (pane.height() < 34 ? 13 : 15);
+    }
+
+    public int detailLineCapacity(Rect pane, int lineHeight, boolean reserveProgressBar) {
+        Objects.requireNonNull(pane);
+        if (lineHeight <= 0) {
+            return 0;
+        }
+        Rect clip = textClip(pane);
+        int reservedBottom = reserveProgressBar && pane.height() >= 34 ? 8 : 0;
+        int availableHeight = clip.bottom() - reservedBottom - detailFirstLineY(pane);
+        return Math.max(0, availableHeight / lineHeight);
+    }
+
     public Rect faultLine() {
         if (mode != Mode.MINIMAL || logicalWidth == 0 || logicalHeight == 0) {
             return EMPTY_RECT;

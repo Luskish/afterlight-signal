@@ -72,7 +72,10 @@ class EchoRouteLoaderTest {
     void rejectsUnknownSchema() throws Exception {
         RouteValidationException exception = assertInvalid(resourceText("unknown-state.json"));
 
-        assertEquals(List.of("schema must be 1, found 2"), exception.errors());
+        assertEquals(List.of(
+                "schema must be 1, found 2",
+                "terminal quest 0000000000000001 does not match established finale 31C9557D2F51238F"),
+                exception.errors());
     }
 
     @Test
@@ -92,7 +95,9 @@ class EchoRouteLoaderTest {
 
         assertEquals(List.of(
                 "duplicate quest ID 0000000000000001 at segments[0].quests[1]",
-                "duplicate segment ID cold_boot at segments[1].id"), exception.errors());
+                "duplicate segment ID cold_boot at segments[1].id",
+                "terminal quest 0000000000000002 does not match established finale 31C9557D2F51238F"),
+                exception.errors());
     }
 
     @Test
@@ -105,7 +110,9 @@ class EchoRouteLoaderTest {
                 """);
 
         assertEquals(
-                List.of("duplicate quest ID 0000000000000001 at segments[1].quests[0]"),
+                List.of(
+                        "duplicate quest ID 0000000000000001 at segments[1].quests[0]",
+                        "terminal quest 0000000000000002 does not match established finale 31C9557D2F51238F"),
                 exception.errors());
     }
 
@@ -147,7 +154,9 @@ class EchoRouteLoaderTest {
 
         assertEquals(List.of(
                 "segment memory has unknown dependency missing",
-                "segment memory is unreachable from every zero-dependency root"), exception.errors());
+                "segment memory is unreachable from every zero-dependency root",
+                "terminal quest 0000000000000002 does not match established finale 31C9557D2F51238F"),
+                exception.errors());
     }
 
     @Test
@@ -157,7 +166,9 @@ class EchoRouteLoaderTest {
         assertEquals(List.of(
                 "segment dependency cycle: memory_a -> memory_b -> memory_a",
                 "segment memory_a is unreachable from every zero-dependency root",
-                "segment memory_b is unreachable from every zero-dependency root"), exception.errors());
+                "segment memory_b is unreachable from every zero-dependency root",
+                "terminal quest 0000000000000003 does not match established finale 31C9557D2F51238F"),
+                exception.errors());
     }
 
     @Test
@@ -191,6 +202,22 @@ class EchoRouteLoaderTest {
                 """);
 
         assertEquals(List.of(
+                "terminal quest 0000000000000001 does not match established finale 31C9557D2F51238F"),
+                exception.errors());
+    }
+
+    @Test
+    void aggregatesFinaleMismatchWithSchemaAndGraphErrors() {
+        RouteValidationException exception = assertInvalid("""
+                {"schema":7,"terminal_quest":"01","segments":[
+                  {"id":"story","after":["missing"],"quests":["01","31C9557D2F51238F"]}
+                ]}
+                """);
+
+        assertEquals(List.of(
+                "schema must be 1, found 7",
+                "segment story has unknown dependency missing",
+                "segment story is unreachable from every zero-dependency root",
                 "terminal quest 0000000000000001 does not match established finale 31C9557D2F51238F"),
                 exception.errors());
     }

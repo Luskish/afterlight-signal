@@ -71,6 +71,7 @@ class ReleaseJarContractTest {
             "org/rllabs/afterlight/EchoContent.class",
             "org/rllabs/afterlight/client/",
             "org/rllabs/afterlight/client/AfterlightClient.class",
+            "org/rllabs/afterlight/client/EchoPaneScroller.class",
             "org/rllabs/afterlight/client/EchoScreen$1.class",
             "org/rllabs/afterlight/client/EchoScreen$ClaimFingerprint.class",
             "org/rllabs/afterlight/client/EchoScreen$MutationFingerprint.class",

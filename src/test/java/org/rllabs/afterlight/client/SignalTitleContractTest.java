@@ -54,6 +54,7 @@ import net.neoforged.neoforge.client.gui.ModListScreen;
 import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforgespi.language.IModInfo;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.MethodVisitor;
@@ -226,6 +227,42 @@ class SignalTitleContractTest {
     }
 
     @Test
+    void productionAccessorReadsPackOwnedVersionAndFallsBackHonestly(@TempDir Path gameDirectory) throws Exception {
+        Path versionFile = gameDirectory.resolve("config/afterlight/pack_version.txt");
+        Files.createDirectories(versionFile.getParent());
+        Files.writeString(versionFile, "0.9.0-rc.3\n");
+
+        Class<?> accessType = Class.forName(
+                "org.rllabs.afterlight.client.SignalTitleScreen$MinecraftClientAccess");
+        Constructor<?> constructor = accessType.getDeclaredConstructor(Path.class);
+        constructor.setAccessible(true);
+        SignalTitleScreen.ClientAccess access = (SignalTitleScreen.ClientAccess) constructor.newInstance(gameDirectory);
+
+        assertEquals("0.9.0-rc.3", access.packVersion());
+        Files.writeString(versionFile, "1.0.0-rc.1\n");
+        assertEquals("0.9.0-rc.3", access.packVersion());
+        Files.writeString(versionFile, "   \n");
+        access = (SignalTitleScreen.ClientAccess) constructor.newInstance(gameDirectory);
+        assertEquals("UNAVAILABLE", access.packVersion());
+        Files.delete(versionFile);
+        access = (SignalTitleScreen.ClientAccess) constructor.newInstance(gameDirectory);
+        assertEquals("UNAVAILABLE", access.packVersion());
+
+        String descriptor = Type.getMethodDescriptor(Type.getType(String.class));
+        assertFalse(methodCalls(accessType, "packVersion", descriptor).contains(
+                "org/rllabs/afterlight/client/SignalTitleScreen$MinecraftClientAccess#modVersion"));
+    }
+
+    @Test
+    void documentsThePackOwnedVersionFileForPublicDeliveryTaskTwo() throws Exception {
+        String readme = Files.readString(Path.of("README.md"));
+
+        assertTrue(readme.contains("config/afterlight/pack_version.txt"));
+        assertTrue(readme.contains("Packwiz-managed UTF-8 file"));
+        assertTrue(readme.contains("exactly match `pack.toml`'s `version` value"));
+    }
+
+    @Test
     void menuGeometryIsDeterministicAtMinimumAndNarrowFallback() {
         Geometry minimum = menuGeometry(854, 480);
         assertEquals(new Geometry(616, 182, 210, 20, 4, 116, 298), minimum);
@@ -356,8 +393,15 @@ class SignalTitleContractTest {
     }
 
     private static List<String> ownMethodCalls(String methodName, String descriptor) throws Exception {
-        String resourceName = "/" + SignalTitleScreen.class.getName().replace('.', '/') + ".class";
-        try (InputStream input = SignalTitleScreen.class.getResourceAsStream(resourceName)) {
+        return methodCalls(SignalTitleScreen.class, methodName, descriptor).stream()
+                .filter(call -> call.startsWith("org/rllabs/afterlight/client/SignalTitleScreen#"))
+                .map(call -> call.substring(call.indexOf('#') + 1))
+                .toList();
+    }
+
+    private static List<String> methodCalls(Class<?> type, String methodName, String descriptor) throws Exception {
+        String resourceName = "/" + type.getName().replace('.', '/') + ".class";
+        try (InputStream input = type.getResourceAsStream(resourceName)) {
             assertNotNull(input, resourceName);
             List<String> calls = new ArrayList<>();
             new ClassReader(input).accept(new ClassVisitor(Opcodes.ASM9) {
@@ -379,9 +423,7 @@ class SignalTitleContractTest {
                                 String name,
                                 String invokedDescriptor,
                                 boolean isInterface) {
-                            if (owner.equals("org/rllabs/afterlight/client/SignalTitleScreen")) {
-                                calls.add(name);
-                            }
+                            calls.add(owner + "#" + name);
                         }
                     };
                 }

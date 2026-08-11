@@ -20,6 +20,10 @@ Run `/echo recover` as the affected player to issue a replacement. Recovery requ
 
 The Signal Reliquary replaces the vanilla title screen by default. Set `replaceTitleScreen=false` in the generated AFTERLIGHT client configuration to restore the vanilla screen. Native multiplayer bans and disabled-online state remain enforced by the replacement screen.
 
+### Pack Version Identity
+
+Public Delivery Task 2 must ship `config/afterlight/pack_version.txt` as a Packwiz-managed UTF-8 file. Its single trimmed line must exactly match `pack.toml`'s `version` value for that pack release. The companion reads only this pack-owned runtime file for the title's `PACK VERSION` field and displays `UNAVAILABLE` when the file is absent, blank, malformed, or unreadable.
+
 ## Developer Build
 
 This repository deliberately has no Gradle wrapper. Install Gradle 9.2.1 and use Temurin 21.0.12. Ordinary developer builds may use dirty tracked files and regular untracked source while iterating:

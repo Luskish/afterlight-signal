@@ -62,7 +62,7 @@ public final class EchoRouteLoader {
                     .anyMatch(terminalQuestId::equals);
             if (!terminalPresent) {
                 errors.add("terminal quest " + EchoRoute.formatQuestId(terminalQuestId) + " is absent from the route");
-            } else if (errors.isEmpty() && terminalQuestId != ESTABLISHED_FINALE_ID) {
+            } else if (terminalQuestId != ESTABLISHED_FINALE_ID) {
                 errors.add("terminal quest " + EchoRoute.formatQuestId(terminalQuestId)
                         + " does not match established finale " + EchoRoute.formatQuestId(ESTABLISHED_FINALE_ID));
             }

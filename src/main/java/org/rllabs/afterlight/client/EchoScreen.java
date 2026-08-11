@@ -14,6 +14,7 @@ import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FormattedCharSequence;
 import org.rllabs.afterlight.Afterlight;
 import org.rllabs.afterlight.client.EchoScreenLayout.Rect;
 import org.rllabs.afterlight.client.EchoScreenModel.Action;
@@ -41,6 +42,8 @@ public class EchoScreen extends Screen {
     private final EchoRoute route;
     private final EchoQuestGateway gateway;
     private final EchoRouteResolver resolver;
+    private final EchoPaneScroller routeScroller = new EchoPaneScroller();
+    private final EchoPaneScroller progressScroller = new EchoPaneScroller();
     private final EnumMap<Action, Button> actionButtons = new EnumMap<>(Action.class);
     private final Map<MutationKey, PendingMutation> pendingMutations = new HashMap<>();
     private EchoScreenModel model;
@@ -85,10 +88,34 @@ public class EchoScreen extends Screen {
     @Override
     public void tick() {
         if (route != null) {
-            model = refreshModel();
+            EchoScreenModel refreshed = refreshModel();
+            if (!refreshed.selectedQuestId().equals(model.selectedQuestId())) {
+                routeScroller.reset();
+                progressScroller.reset();
+            }
+            model = refreshed;
             advancePendingMutations();
         }
         updateButtons();
+    }
+
+    @Override
+    public boolean mouseScrolled(
+            double mouseX,
+            double mouseY,
+            double horizontalAmount,
+            double verticalAmount) {
+        if (layout != null && layout.mode() != EchoScreenLayout.Mode.MINIMAL && verticalAmount != 0.0D) {
+            if (contains(layout.route(), mouseX, mouseY)) {
+                routeScroller.scroll(verticalAmount);
+                return true;
+            }
+            if (contains(layout.progress(), mouseX, mouseY)) {
+                progressScroller.scroll(verticalAmount);
+                return true;
+            }
+        }
+        return super.mouseScrolled(mouseX, mouseY, horizontalAmount, verticalAmount);
     }
 
     @Override
@@ -353,31 +380,17 @@ public class EchoScreen extends Screen {
     private void renderRoute(GuiGraphics graphics) {
         Rect pane = layout.route();
         drawPaneLabel(graphics, pane, Component.translatable(layout.paneLabels().routeKey()), BONE);
-        int y = pane.y() + (pane.height() < 34 ? 13 : 15);
         List<Component> lines = routeLines(model);
-        for (int index = 0; index < lines.size(); index++) {
-            int color = index == 0 ? CYAN : lines.get(index).getString().startsWith("PREREQUISITE") ? AMBER : BONE;
-            y = drawWrapped(graphics, lines.get(index), pane, index == 0 ? y : y + 2, color);
-        }
-        if (model.selectedQuestId().isPresent() && y + 9 < pane.bottom() - 3) {
-            drawClippedLine(
-                    graphics,
-                    Component.literal("Q//" + EchoRoute.formatQuestId(model.selectedQuestId().getAsLong())),
-                    pane,
-                    y + 3,
-                    AMBER);
-        }
+        List<FormattedCharSequence> wrapped = wrapDetailLines(lines, pane, false);
+        renderScrollableLines(graphics, pane, wrapped, routeScroller, false, BONE);
     }
 
     private void renderProgress(GuiGraphics graphics) {
         Rect pane = layout.progress();
         drawPaneLabel(graphics, pane, Component.translatable(layout.paneLabels().progressKey()), CYAN);
-        int y = pane.y() + (pane.height() < 34 ? 13 : 15);
         List<Component> lines = progressLines(model);
-        for (int index = 0; index < lines.size() && y + 9 < pane.bottom() - 8; index++) {
-            int color = index == 1 ? CYAN : index == lines.size() - 1 ? AMBER : BONE;
-            y = drawWrapped(graphics, lines.get(index), pane, index == 0 ? y : y + 2, color);
-        }
+        List<FormattedCharSequence> wrapped = wrapDetailLines(lines, pane, true);
+        renderScrollableLines(graphics, pane, wrapped, progressScroller, true, CYAN);
         if (pane.height() >= 34) {
             int barX = pane.x() + 5;
             int barY = pane.bottom() - 8;
@@ -396,6 +409,8 @@ public class EchoScreen extends Screen {
         lines.add(model.questSubtitle());
         lines.addAll(model.prerequisites());
         lines.addAll(model.tasks());
+        model.selectedQuestId().ifPresent(questId -> lines.add(
+                Component.literal("Q//" + EchoRoute.formatQuestId(questId))));
         return List.copyOf(lines);
     }
 
@@ -409,6 +424,64 @@ public class EchoScreen extends Screen {
                 model.interactionTitle(),
                 model.progressValue(),
                 model.completionState());
+    }
+
+    private List<FormattedCharSequence> wrapDetailLines(
+            List<Component> lines,
+            Rect pane,
+            boolean progressPane) {
+        int textWidth = Math.max(1, pane.width() - 10);
+        List<FormattedCharSequence> wrapped = new ArrayList<>();
+        for (int index = 0; index < lines.size(); index++) {
+            Component line = lines.get(index);
+            int color;
+            if (progressPane) {
+                color = index == 1 ? CYAN : index == lines.size() - 1 ? AMBER : BONE;
+            } else {
+                color = index == 0 ? CYAN : line.getString().startsWith("PREREQUISITE") ? AMBER : BONE;
+            }
+            Component styled = line.copy().withStyle(style -> style.withColor(color));
+            wrapped.addAll(font.split(styled, textWidth));
+        }
+        return List.copyOf(wrapped);
+    }
+
+    private void renderScrollableLines(
+            GuiGraphics graphics,
+            Rect pane,
+            List<FormattedCharSequence> lines,
+            EchoPaneScroller scroller,
+            boolean reserveProgressBar,
+            int indicatorColor) {
+        int capacity = layout.detailLineCapacity(pane, font.lineHeight, reserveProgressBar);
+        List<FormattedCharSequence> visible = scroller.window(lines, capacity);
+        int y = layout.detailFirstLineY(pane);
+        Rect clip = layout.textClip(pane);
+        graphics.enableScissor(clip.x(), clip.y(), clip.right(), clip.bottom());
+        for (FormattedCharSequence line : visible) {
+            graphics.drawString(font, line, pane.x() + 5, y, 0xFFFFFFFF, false);
+            y += font.lineHeight;
+        }
+        graphics.disableScissor();
+        drawScrollPosition(graphics, pane, scroller, indicatorColor);
+    }
+
+    private void drawScrollPosition(
+            GuiGraphics graphics,
+            Rect pane,
+            EchoPaneScroller scroller,
+            int color) {
+        if (scroller.maximumOffset() == 0) {
+            return;
+        }
+        int first = scroller.offset() + 1;
+        int last = Math.min(scroller.totalLines(), scroller.offset() + scroller.capacity());
+        Component position = Component.literal(first + "-" + last + "/" + scroller.totalLines());
+        int x = Math.max(pane.x() + 5, pane.right() - 5 - font.width(position));
+        Rect clip = layout.textClip(pane);
+        graphics.enableScissor(clip.x(), clip.y(), clip.right(), clip.bottom());
+        graphics.drawString(font, position, x, pane.y() + 4, opaque(color), false);
+        graphics.disableScissor();
     }
 
     private void drawPaneLabel(GuiGraphics graphics, Rect pane, Component label, int color) {
@@ -474,6 +547,10 @@ public class EchoScreen extends Screen {
 
     private static int opaque(int color) {
         return 0xFF000000 | color;
+    }
+
+    private static boolean contains(Rect rect, double x, double y) {
+        return x >= rect.x() && x < rect.right() && y >= rect.y() && y < rect.bottom();
     }
 
     private record MutationKey(Action action, long targetId) {

@@ -1,7 +1,12 @@
 package org.rllabs.afterlight.client;
 
 import com.mojang.authlib.minecraft.BanDetails;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Objects;
 import javax.annotation.Nullable;
 import net.minecraft.SharedConstants;
 import net.minecraft.client.Minecraft;
@@ -22,7 +27,6 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
 import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.client.gui.ModListScreen;
-import org.rllabs.afterlight.Afterlight;
 
 public final class SignalTitleScreen extends Screen {
     private static final ResourceLocation BACKGROUND =
@@ -297,6 +301,20 @@ public final class SignalTitleScreen extends Screen {
     }
 
     private static final class MinecraftClientAccess implements ClientAccess {
+        private static final Path PACK_VERSION_PATH = Path.of("config", "afterlight", "pack_version.txt");
+        @Nullable
+        private final Path gameDirectory;
+        @Nullable
+        private String cachedPackVersion;
+
+        private MinecraftClientAccess() {
+            this.gameDirectory = null;
+        }
+
+        private MinecraftClientAccess(Path gameDirectory) {
+            this.gameDirectory = Objects.requireNonNull(gameDirectory);
+        }
+
         @Override
         public boolean allowsMultiplayer() {
             return Minecraft.getInstance().allowsMultiplayer();
@@ -325,7 +343,27 @@ public final class SignalTitleScreen extends Screen {
 
         @Override
         public String packVersion() {
-            return modVersion(Afterlight.MOD_ID);
+            if (this.cachedPackVersion != null) {
+                return this.cachedPackVersion;
+            }
+            Path root = this.gameDirectory == null
+                    ? Minecraft.getInstance().gameDirectory.toPath()
+                    : this.gameDirectory;
+            Path versionFile = root.resolve(PACK_VERSION_PATH);
+            try {
+                String version = Files.readString(versionFile, StandardCharsets.UTF_8).strip();
+                if (!version.isEmpty()
+                        && version.length() <= 128
+                        && version.codePoints().noneMatch(Character::isWhitespace)) {
+                    this.cachedPackVersion = version;
+                    return this.cachedPackVersion;
+                }
+            } catch (IOException | SecurityException ignored) {
+                this.cachedPackVersion = "UNAVAILABLE";
+                return this.cachedPackVersion;
+            }
+            this.cachedPackVersion = "UNAVAILABLE";
+            return this.cachedPackVersion;
         }
 
         @Override

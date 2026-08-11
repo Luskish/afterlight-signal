@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.InputStream;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -14,6 +15,11 @@ import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.gui.narration.NarrationThunk;
 import net.minecraft.client.gui.screens.Screen;
 import org.junit.jupiter.api.Test;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import org.rllabs.afterlight.integration.EchoQuestGateway;
 import org.rllabs.afterlight.route.EchoQuestSnapshot;
 import org.rllabs.afterlight.route.EchoQuestSnapshot.TaskSnapshot;
@@ -110,7 +116,8 @@ class EchoScreenTest {
                         "Signal Trace",
                         "Recover the missing carrier",
                         "PREREQUISITES // CLEAR",
-                        "TASK // Check the relay // 2 / 5 // INCOMPLETE"),
+                        "TASK // Check the relay // 2 / 5 // INCOMPLETE",
+                        "Q//0000000000000011"),
                 visibleLines("routeLines", model));
         assertTrue(visibleLines("progressLines", model).containsAll(List.of(
                 "Check the relay",
@@ -118,10 +125,119 @@ class EchoScreenTest {
                 "TASK INCOMPLETE")));
     }
 
+    @Test
+    void mouseWheelMovesTheProductionRouteAndProgressViewports() throws Exception {
+        EchoScreen screen = new EchoScreen(route(), new FakeGateway());
+        EchoScreenLayout layout = EchoScreenLayout.compute(854, 480, 4);
+        setField(screen, "layout", layout);
+
+        Object routeScroller = field(screen, "routeScroller");
+        Object progressScroller = field(screen, "progressScroller");
+        primeScroller(routeScroller);
+        primeScroller(progressScroller);
+
+        assertTrue(screen.mouseScrolled(
+                layout.route().x() + 1.0D,
+                layout.route().y() + 1.0D,
+                0.0D,
+                -1.0D));
+        assertEquals(1, scrollerOffset(routeScroller));
+        assertEquals(0, scrollerOffset(progressScroller));
+
+        assertTrue(screen.mouseScrolled(
+                layout.progress().x() + 1.0D,
+                layout.progress().y() + 1.0D,
+                0.0D,
+                -1.0D));
+        assertEquals(1, scrollerOffset(routeScroller));
+        assertEquals(1, scrollerOffset(progressScroller));
+    }
+
+    @Test
+    void renderPathUsesMeasuredCapacityAndScrollerWindows() throws Exception {
+        String paneDescriptor = Type.getMethodDescriptor(
+                Type.VOID_TYPE,
+                Type.getType(net.minecraft.client.gui.GuiGraphics.class));
+        List<String> routeCalls = methodCalls("renderRoute", paneDescriptor);
+        List<String> progressCalls = methodCalls("renderProgress", paneDescriptor);
+        String viewportDescriptor = Type.getMethodDescriptor(
+                Type.VOID_TYPE,
+                Type.getType(net.minecraft.client.gui.GuiGraphics.class),
+                Type.getType(EchoScreenLayout.Rect.class),
+                Type.getType(List.class),
+                Type.getType(EchoPaneScroller.class),
+                Type.BOOLEAN_TYPE,
+                Type.INT_TYPE);
+        List<String> viewportCalls = methodCalls("renderScrollableLines", viewportDescriptor);
+
+        assertTrue(routeCalls.contains("org/rllabs/afterlight/client/EchoScreen#wrapDetailLines"));
+        assertTrue(routeCalls.contains("org/rllabs/afterlight/client/EchoScreen#renderScrollableLines"));
+        assertTrue(progressCalls.contains("org/rllabs/afterlight/client/EchoScreen#wrapDetailLines"));
+        assertTrue(progressCalls.contains("org/rllabs/afterlight/client/EchoScreen#renderScrollableLines"));
+        assertTrue(viewportCalls.contains("org/rllabs/afterlight/client/EchoScreenLayout#detailLineCapacity"));
+        assertTrue(viewportCalls.contains("org/rllabs/afterlight/client/EchoPaneScroller#window"));
+    }
+
     private static EchoScreenModel model(EchoScreen screen) throws Exception {
         var field = EchoScreen.class.getDeclaredField("model");
         field.setAccessible(true);
         return (EchoScreenModel) field.get(screen);
+    }
+
+    private static Object field(EchoScreen screen, String name) throws Exception {
+        var field = EchoScreen.class.getDeclaredField(name);
+        field.setAccessible(true);
+        return field.get(screen);
+    }
+
+    private static void setField(EchoScreen screen, String name, Object value) throws Exception {
+        var field = EchoScreen.class.getDeclaredField(name);
+        field.setAccessible(true);
+        field.set(screen, value);
+    }
+
+    private static void primeScroller(Object scroller) throws Exception {
+        Method window = scroller.getClass().getDeclaredMethod("window", List.class, int.class);
+        window.setAccessible(true);
+        window.invoke(scroller, List.of("one", "two", "three"), 1);
+    }
+
+    private static int scrollerOffset(Object scroller) throws Exception {
+        Method offset = scroller.getClass().getDeclaredMethod("offset");
+        offset.setAccessible(true);
+        return (int) offset.invoke(scroller);
+    }
+
+    private static List<String> methodCalls(String methodName, String descriptor) throws Exception {
+        String resourceName = "/" + EchoScreen.class.getName().replace('.', '/') + ".class";
+        try (InputStream input = EchoScreen.class.getResourceAsStream(resourceName)) {
+            List<String> calls = new ArrayList<>();
+            new ClassReader(input).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override
+                public MethodVisitor visitMethod(
+                        int access,
+                        String name,
+                        String methodDescriptor,
+                        String signature,
+                        String[] exceptions) {
+                    if (!methodName.equals(name) || !descriptor.equals(methodDescriptor)) {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override
+                        public void visitMethodInsn(
+                                int opcode,
+                                String owner,
+                                String name,
+                                String invokedDescriptor,
+                                boolean isInterface) {
+                            calls.add(owner + "#" + name);
+                        }
+                    };
+                }
+            }, 0);
+            return List.copyOf(calls);
+        }
     }
 
     @SuppressWarnings("unchecked")
