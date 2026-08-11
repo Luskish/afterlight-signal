@@ -46,7 +46,7 @@ class EchoRouteResolverTest {
 
     @Test
     void earliestRouteRewardAndConfiguredRewardOrderWin() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, completeWithRewards(FIRST_QUEST,
                         reward(0x102L, false, false, true),
                         reward(0x103L, false, false, true)),
@@ -59,14 +59,14 @@ class EchoRouteResolverTest {
 
     @Test
     void unavailableRewardOnIncompleteQuestDoesNotPrecedeSubmission() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, snapshot(
                         FIRST_QUEST,
                         false,
                         true,
                         List.of(),
                         List.of(manualTask(0x101L, true)),
-                        List.of(reward(0x102L, false, false, false)))));
+                        List.of(reward(0x102L, false, false, true, false)))));
 
         assertEquals(Kind.SUBMIT_TASK, recommendation.kind());
         assertEquals(OptionalLong.of(0x101L), recommendation.taskId());
@@ -74,9 +74,9 @@ class EchoRouteResolverTest {
 
     @Test
     void choiceRewardRequiresArchiveAndCannotDirectClaim() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, completeWithRewards(FIRST_QUEST,
-                        reward(0x102L, false, true, true))));
+                        reward(0x102L, false, true, false, false))));
 
         assertEquals(Kind.CLAIM_REWARD, recommendation.kind());
         assertEquals(FIRST_QUEST, recommendation.questId());
@@ -87,9 +87,9 @@ class EchoRouteResolverTest {
 
     @Test
     void unsupportedRewardRequiresArchiveAndCannotDirectClaim() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, completeWithRewards(FIRST_QUEST,
-                        reward(0x102L, false, false, false))));
+                        reward(0x102L, false, false, false, false))));
 
         assertEquals(Kind.CLAIM_REWARD, recommendation.kind());
         assertEquals(OptionalLong.of(0x102L), recommendation.rewardId());
@@ -98,8 +98,22 @@ class EchoRouteResolverTest {
     }
 
     @Test
+    void blockedStandardRewardDoesNotPreemptLaterClaimableReward() {
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
+                FIRST_QUEST, completeWithRewards(FIRST_QUEST,
+                        reward(0x102L, false, false, true, false),
+                        reward(0x103L, false, false, true, true))));
+
+        assertEquals(Kind.CLAIM_REWARD, recommendation.kind());
+        assertEquals(FIRST_QUEST, recommendation.questId());
+        assertEquals(OptionalLong.of(0x103L), recommendation.rewardId());
+        assertFalse(recommendation.requiresArchive());
+        assertTrue(recommendation.canClaimDirectly());
+    }
+
+    @Test
     void earliestStartableIncompleteQuestSelectsDirectManualTask() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, startable(FIRST_QUEST,
                         automaticTask(0x101L),
                         manualTask(0x102L, true),
@@ -118,10 +132,10 @@ class EchoRouteResolverTest {
 
     @Test
     void unsupportedStartableInteractionRequiresArchive() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, startable(FIRST_QUEST,
                         automaticTask(0x101L),
-                        manualTask(0x102L, false))));
+                        new TaskSnapshot(0x102L, "Manual", 0L, 1L, false, true, false, false))));
 
         assertRecommendation(
                 recommendation,
@@ -136,7 +150,7 @@ class EchoRouteResolverTest {
 
     @Test
     void teamCompleteQuestDoesNotBecomeSubmitRecommendation() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, snapshot(FIRST_QUEST, true, true, List.of(),
                         List.of(manualTask(0x102L, true)), List.of()),
                 SECOND_QUEST, startable(SECOND_QUEST, manualTask(0x202L, true))));
@@ -148,7 +162,7 @@ class EchoRouteResolverTest {
 
     @Test
     void teamCompleteQuestMayStillExposeIndividualReward() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, completeWithRewards(FIRST_QUEST,
                         reward(0x102L, false, false, true)),
                 SECOND_QUEST, startable(SECOND_QUEST, manualTask(0x202L, true))));
@@ -159,7 +173,7 @@ class EchoRouteResolverTest {
 
     @Test
     void earliestLockedQuestCopiesEarliestUnmetDependency() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+        EchoRecommendation recommendation = resolver.resolve(route(), knownRouteSnapshots(
                 FIRST_QUEST, complete(FIRST_QUEST),
                 SECOND_QUEST, locked(SECOND_QUEST, 0x901L, 0x902L),
                 THIRD_QUEST, locked(THIRD_QUEST, 0x903L)));
@@ -191,10 +205,12 @@ class EchoRouteResolverTest {
 
     @Test
     void sideQuestSnapshotsNeverDisplaceConfiguredRoute() {
-        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
-                FIRST_QUEST, startable(FIRST_QUEST, manualTask(0x101L, true)),
-                SIDE_QUEST, completeWithRewards(SIDE_QUEST,
-                        reward(0x501L, false, false, true))));
+        Map<Long, EchoQuestSnapshot> snapshots = new HashMap<>(knownRouteSnapshots(
+                FIRST_QUEST, startable(FIRST_QUEST, manualTask(0x101L, true))));
+        snapshots.put(SIDE_QUEST, completeWithRewards(SIDE_QUEST,
+                reward(0x501L, false, false, true)));
+
+        EchoRecommendation recommendation = resolver.resolve(route(), snapshots);
 
         assertEquals(Kind.SUBMIT_TASK, recommendation.kind());
         assertEquals(FIRST_QUEST, recommendation.questId());
@@ -202,30 +218,42 @@ class EchoRouteResolverTest {
     }
 
     @Test
-    void missingSnapshotsAreIgnoredWithoutMutatingInput() {
+    void partialSnapshotsReturnSignalUnavailableWithoutMutatingInput() {
         Map<Long, EchoQuestSnapshot> snapshots = new HashMap<>();
         snapshots.put(SECOND_QUEST, locked(SECOND_QUEST, 0x902L));
         Map<Long, EchoQuestSnapshot> before = Map.copyOf(snapshots);
 
         EchoRecommendation recommendation = resolver.resolve(route(), snapshots);
 
-        assertEquals(Kind.LOCKED, recommendation.kind());
-        assertEquals(SECOND_QUEST, recommendation.questId());
+        assertEquals(Kind.SIGNAL_UNAVAILABLE, recommendation.kind());
+        assertEquals(FIRST_QUEST, recommendation.questId());
+        assertTrue(recommendation.requiresArchive());
         assertEquals(before, snapshots);
     }
 
     @Test
-    void entirelyMissingSnapshotsReturnRouteCompleteSafely() {
+    void entirelyMissingSnapshotsReturnSignalUnavailableSafely() {
         EchoRecommendation recommendation = resolver.resolve(route(), Map.of());
 
         assertRecommendation(
                 recommendation,
-                Kind.ROUTE_COMPLETE,
-                TERMINAL_QUEST,
+                Kind.SIGNAL_UNAVAILABLE,
+                FIRST_QUEST,
                 OptionalLong.empty(),
                 OptionalLong.empty(),
                 OptionalLong.empty(),
-                false);
+                true);
+    }
+
+    @Test
+    void routeCompleteRequiresEveryConfiguredSnapshot() {
+        EchoRecommendation recommendation = resolver.resolve(route(), Map.of(
+                FIRST_QUEST, complete(FIRST_QUEST),
+                SECOND_QUEST, complete(SECOND_QUEST),
+                THIRD_QUEST, complete(THIRD_QUEST)));
+
+        assertEquals(Kind.SIGNAL_UNAVAILABLE, recommendation.kind());
+        assertEquals(TERMINAL_QUEST, recommendation.questId());
     }
 
     @Test
@@ -268,9 +296,9 @@ class EchoRouteResolverTest {
     }
 
     @Test
-    void recommendationKindContainsExactlyFourStates() {
+    void recommendationKindContainsExactlyFiveStates() {
         assertEquals(
-                List.of("CLAIM_REWARD", "SUBMIT_TASK", "LOCKED", "ROUTE_COMPLETE"),
+                List.of("SIGNAL_UNAVAILABLE", "CLAIM_REWARD", "SUBMIT_TASK", "LOCKED", "ROUTE_COMPLETE"),
                 java.util.Arrays.stream(Kind.values()).map(Enum::name).toList());
     }
 
@@ -319,11 +347,11 @@ class EchoRouteResolverTest {
     }
 
     private static TaskSnapshot automaticTask(long taskId) {
-        return new TaskSnapshot(taskId, "Automatic", 0L, 1L, false, false, false);
+        return new TaskSnapshot(taskId, "Automatic", 0L, 1L, false, false, true, false);
     }
 
     private static TaskSnapshot manualTask(long taskId, boolean submitEligible) {
-        return new TaskSnapshot(taskId, "Manual", 0L, 1L, false, true, submitEligible);
+        return new TaskSnapshot(taskId, "Manual", 0L, 1L, false, true, true, submitEligible);
     }
 
     private static RewardSnapshot reward(
@@ -331,7 +359,34 @@ class EchoRouteResolverTest {
             boolean claimed,
             boolean choice,
             boolean claimEligible) {
-        return new RewardSnapshot(rewardId, "Reward " + rewardId, claimed, choice, claimEligible);
+        return reward(rewardId, claimed, choice, !choice, claimEligible);
+    }
+
+    private static RewardSnapshot reward(
+            long rewardId,
+            boolean claimed,
+            boolean choice,
+            boolean directInteractionSupported,
+            boolean claimEligible) {
+        return new RewardSnapshot(
+                rewardId,
+                "Reward " + rewardId,
+                claimed,
+                choice,
+                directInteractionSupported,
+                claimEligible);
+    }
+
+    private static Map<Long, EchoQuestSnapshot> knownRouteSnapshots(Object... overrides) {
+        Map<Long, EchoQuestSnapshot> snapshots = new HashMap<>();
+        snapshots.put(FIRST_QUEST, complete(FIRST_QUEST));
+        snapshots.put(SECOND_QUEST, complete(SECOND_QUEST));
+        snapshots.put(THIRD_QUEST, complete(THIRD_QUEST));
+        snapshots.put(TERMINAL_QUEST, complete(TERMINAL_QUEST));
+        for (int index = 0; index < overrides.length; index += 2) {
+            snapshots.put((Long) overrides[index], (EchoQuestSnapshot) overrides[index + 1]);
+        }
+        return Map.copyOf(snapshots);
     }
 
     private static void assertRecommendation(

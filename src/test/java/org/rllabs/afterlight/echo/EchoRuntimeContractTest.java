@@ -15,14 +15,19 @@ import io.netty.buffer.Unpooled;
 import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.RegistryAccess;
@@ -49,6 +54,10 @@ import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.network.registration.NetworkRegistry;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
 import org.junit.jupiter.api.Test;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 import org.rllabs.afterlight.Afterlight;
 import org.rllabs.afterlight.EchoContent;
 import org.rllabs.afterlight.client.AfterlightClient;
@@ -227,25 +236,31 @@ class EchoRuntimeContractTest {
 
     @Test
     void manualTickGameTestsUseDistinctSerialBatches() throws Exception {
-        List<String> batchNames = List.of(
-                EchoGameTests.class
-                        .getMethod("firstLoginIssuesEcho", GameTestHelper.class)
-                        .getAnnotation(GameTest.class)
-                        .batch(),
-                EchoGameTests.class
-                        .getMethod("logoutCancelsPendingIssue", GameTestHelper.class)
-                        .getAnnotation(GameTest.class)
-                        .batch(),
-                EchoGameTests.class
-                        .getMethod("reconnectDelayResets", GameTestHelper.class)
-                        .getAnnotation(GameTest.class)
-                        .batch());
+        Map<String, Method> gameTests = Arrays.stream(EchoGameTests.class.getDeclaredMethods())
+                .filter(method -> method.isAnnotationPresent(GameTest.class))
+                .collect(Collectors.toMap(Method::getName, Function.identity()));
+        Map<String, Long> batchOccurrences = gameTests.values().stream()
+                .map(method -> method.getAnnotation(GameTest.class).batch())
+                .collect(Collectors.groupingBy(Function.identity(), Collectors.counting()));
+        Set<String> bytecodeCallers = methodsInvoking(
+                EchoGameTests.class,
+                EchoGameTests.class,
+                "fireServerPostTick",
+                "(Lnet/minecraft/gametest/framework/GameTestHelper;)V");
 
-        assertFalse(batchNames.stream().anyMatch(String::isBlank), "manual tick batch names must be nonblank");
-        assertFalse(
-                batchNames.stream().anyMatch(GameTestBatch.DEFAULT_BATCH_NAME::equals),
-                "manual tick GameTests must not use the default batch");
-        assertEquals(3, Set.copyOf(batchNames).size(), "manual tick GameTests must use distinct batches");
+        assertFalse(bytecodeCallers.isEmpty(), "no manual tick bytecode callers discovered");
+        for (String bytecodeCaller : bytecodeCallers) {
+            Method gameTest = enclosingGameTest(bytecodeCaller, gameTests);
+            String batch = gameTest.getAnnotation(GameTest.class).batch();
+            assertFalse(batch.isBlank(), () -> gameTest.getName() + " manual tick batch is blank");
+            assertFalse(
+                    GameTestBatch.DEFAULT_BATCH_NAME.equals(batch),
+                    () -> gameTest.getName() + " uses the default batch");
+            assertEquals(
+                    1L,
+                    batchOccurrences.get(batch),
+                    () -> gameTest.getName() + " shares manual tick batch " + batch);
+        }
     }
 
     @Test
@@ -285,6 +300,59 @@ class EchoRuntimeContractTest {
             assertNotNull(input, resourceName);
             return new String(input.readAllBytes(), StandardCharsets.ISO_8859_1);
         }
+    }
+
+    private static Set<String> methodsInvoking(
+            Class<?> sourceType,
+            Class<?> targetOwner,
+            String targetName,
+            String targetDescriptor) throws Exception {
+        String resourceName = "/" + sourceType.getName().replace('.', '/') + ".class";
+        String targetInternalName = targetOwner.getName().replace('.', '/');
+        Set<String> callers = new LinkedHashSet<>();
+        try (InputStream input = sourceType.getResourceAsStream(resourceName)) {
+            assertNotNull(input, resourceName);
+            new ClassReader(input).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override
+                public MethodVisitor visitMethod(
+                        int access,
+                        String name,
+                        String descriptor,
+                        String signature,
+                        String[] exceptions) {
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override
+                        public void visitMethodInsn(
+                                int opcode,
+                                String owner,
+                                String invokedName,
+                                String invokedDescriptor,
+                                boolean isInterface) {
+                            if (opcode == Opcodes.INVOKESTATIC
+                                    && owner.equals(targetInternalName)
+                                    && invokedName.equals(targetName)
+                                    && invokedDescriptor.equals(targetDescriptor)) {
+                                callers.add(name);
+                            }
+                        }
+                    };
+                }
+            }, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+        }
+        return Set.copyOf(callers);
+    }
+
+    private static Method enclosingGameTest(String bytecodeCaller, Map<String, Method> gameTests) {
+        Method direct = gameTests.get(bytecodeCaller);
+        if (direct != null) {
+            return direct;
+        }
+        return gameTests.entrySet().stream()
+                .filter(entry -> bytecodeCaller.startsWith("lambda$" + entry.getKey() + "$"))
+                .map(Map.Entry::getValue)
+                .findFirst()
+                .orElseThrow(() -> new AssertionError(
+                        "manual tick bytecode caller is not enclosed by a GameTest: " + bytecodeCaller));
     }
 
     private static String normalizedClassName(Path root, Path classFile) {

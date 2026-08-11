@@ -27,6 +27,16 @@ public record EchoRecommendation(
                 requiresArchive);
     }
 
+    public static EchoRecommendation signalUnavailable(long questId) {
+        return new EchoRecommendation(
+                Kind.SIGNAL_UNAVAILABLE,
+                questId,
+                OptionalLong.empty(),
+                OptionalLong.empty(),
+                OptionalLong.empty(),
+                true);
+    }
+
     public static EchoRecommendation submitTask(long questId, OptionalLong taskId, boolean requiresArchive) {
         return new EchoRecommendation(
                 Kind.SUBMIT_TASK,
@@ -66,6 +76,7 @@ public record EchoRecommendation(
     }
 
     public enum Kind {
+        SIGNAL_UNAVAILABLE,
         CLAIM_REWARD,
         SUBMIT_TASK,
         LOCKED,

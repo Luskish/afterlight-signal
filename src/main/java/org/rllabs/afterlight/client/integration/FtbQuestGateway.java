@@ -15,6 +15,7 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -25,18 +26,29 @@ import org.rllabs.afterlight.route.EchoQuestSnapshot.TaskSnapshot;
 import org.rllabs.afterlight.route.EchoRoute;
 
 public final class FtbQuestGateway implements EchoQuestGateway {
+    private final ClientAccess access;
+
+    public FtbQuestGateway() {
+        this(new FtbClientAccess());
+    }
+
+    FtbQuestGateway(ClientAccess access) {
+        this.access = Objects.requireNonNull(access);
+    }
+
     @Override
     public Map<Long, EchoQuestSnapshot> snapshots(EchoRoute route) {
-        ClientState state = synchronizedState();
-        if (state == null) {
+        Objects.requireNonNull(route);
+        SynchronizedState state = access.synchronizedState();
+        if (state == null || state.locked()) {
             return Map.of();
         }
 
         Map<Long, EchoQuestSnapshot> snapshots = new LinkedHashMap<>();
         for (long questId : route.questIds()) {
-            Quest quest = state.file().getQuest(questId);
+            QuestState quest = state.quest(questId);
             if (quest != null) {
-                snapshots.put(questId, snapshot(quest, state));
+                snapshots.put(questId, snapshot(quest));
             }
         }
         return Collections.unmodifiableMap(snapshots);
@@ -44,99 +56,288 @@ public final class FtbQuestGateway implements EchoQuestGateway {
 
     @Override
     public void submit(long taskId) {
-        ClientState state = synchronizedState();
-        if (state == null || Minecraft.getInstance().getConnection() == null) {
+        SynchronizedState state = access.synchronizedState();
+        if (state == null || state.locked() || !access.connected()) {
             return;
         }
-        Task task = state.file().getTask(taskId);
-        if (task != null && isDirectManualTask(task)
-                && state.teamData().canStartTasks(task.getQuest())
-                && !state.teamData().isCompleted(task)) {
-            PacketDistributor.sendToServer(new SubmitTaskMessage(taskId));
+        TaskState task = state.task(taskId);
+        if (task != null
+                && task.autoSubmitOnPlayerTick() <= 0
+                && task.directInteractionSupported()
+                && task.submitEligible()
+                && !task.complete()) {
+            access.send(new SubmitTaskMessage(taskId));
         }
     }
 
     @Override
     public void claim(long rewardId) {
-        ClientState state = synchronizedState();
-        if (state == null || Minecraft.getInstance().getConnection() == null) {
+        SynchronizedState state = access.synchronizedState();
+        if (state == null || state.locked() || !access.connected()) {
             return;
         }
-        Reward reward = state.file().getReward(rewardId);
-        if (reward != null && isDirectReward(reward)
-                && !state.teamData().isRewardBlocked(reward)
-                && state.teamData().getClaimType(state.player().getUUID(), reward).canClaim()) {
-            PacketDistributor.sendToServer(new ClaimRewardMessage(rewardId, true));
+        RewardState reward = state.reward(rewardId);
+        if (reward != null
+                && !reward.claimed()
+                && !reward.choice()
+                && reward.directInteractionSupported()
+                && reward.claimEligible()) {
+            access.send(new ClaimRewardMessage(rewardId, true));
         }
     }
 
     @Override
     public void openArchive(long questId) {
-        ClientQuestFile file = ClientQuestFile.INSTANCE;
-        if (file != null && file.getQuest(questId) != null) {
-            ClientQuestFile.openBookToQuestObject(questId);
+        if (access.hasQuest(questId)) {
+            access.openArchive(questId);
         }
     }
 
-    private static EchoQuestSnapshot snapshot(Quest quest, ClientState state) {
-        TeamData teamData = state.teamData();
-        boolean startable = teamData.canStartTasks(quest);
-        List<Long> unmetDependencyIds = quest.streamDependencies()
-                .filter(dependency -> !teamData.isCompleted(dependency))
-                .map(QuestObject::getId)
+    private static EchoQuestSnapshot snapshot(QuestState quest) {
+        List<TaskSnapshot> tasks = quest.tasks().stream()
+                .map(FtbQuestGateway::taskSnapshot)
                 .toList();
-        List<TaskSnapshot> tasks = quest.getTasks().stream()
-                .map(task -> taskSnapshot(task, teamData, startable))
+        List<RewardSnapshot> rewards = quest.rewards().stream()
+                .map(FtbQuestGateway::rewardSnapshot)
                 .toList();
-        List<RewardSnapshot> rewards = quest.getRewards().stream()
-                .map(reward -> rewardSnapshot(reward, state))
-                .toList();
-
         return new EchoQuestSnapshot(
-                quest.getId(),
-                quest.getTitle().getString(),
-                quest.getSubtitle().getString(),
-                teamData.isCompleted(quest),
-                startable,
-                unmetDependencyIds,
+                quest.id(),
+                quest.title(),
+                quest.subtitle(),
+                quest.teamComplete(),
+                quest.startable(),
+                quest.unmetDependencyIds(),
                 tasks,
                 rewards);
     }
 
-    private static TaskSnapshot taskSnapshot(Task task, TeamData teamData, boolean startable) {
-        boolean complete = teamData.isCompleted(task);
-        boolean manualSubmit = isDirectManualTask(task);
+    private static TaskSnapshot taskSnapshot(TaskState task) {
+        boolean manualSubmit = task.autoSubmitOnPlayerTick() <= 0;
+        boolean submitEligible = manualSubmit
+                && task.directInteractionSupported()
+                && task.submitEligible()
+                && !task.complete();
         return new TaskSnapshot(
-                task.getId(),
-                task.getTitle().getString(),
-                teamData.getProgress(task),
-                task.getMaxProgress(),
-                complete,
+                task.id(),
+                task.title(),
+                task.currentValue(),
+                task.requiredValue(),
+                task.complete(),
                 manualSubmit,
-                manualSubmit && startable && !complete && task.isValid());
+                task.directInteractionSupported(),
+                submitEligible);
     }
 
-    private static RewardSnapshot rewardSnapshot(Reward reward, ClientState state) {
-        boolean choice = reward instanceof ChoiceReward;
-        boolean claimed = state.teamData().isRewardClaimed(state.player().getUUID(), reward);
-        boolean claimEligible = !choice
-                && isDirectReward(reward)
-                && !state.teamData().isRewardBlocked(reward)
-                && state.teamData().getClaimType(state.player().getUUID(), reward).canClaim();
+    private static RewardSnapshot rewardSnapshot(RewardState reward) {
+        boolean claimEligible = !reward.claimed()
+                && !reward.choice()
+                && reward.directInteractionSupported()
+                && reward.claimEligible();
         return new RewardSnapshot(
-                reward.getId(),
-                reward.getTitle().getString(),
-                claimed,
-                choice,
+                reward.id(),
+                reward.title(),
+                reward.claimed(),
+                reward.choice(),
+                reward.directInteractionSupported(),
                 claimEligible);
     }
 
-    private static boolean isDirectManualTask(Task task) {
-        return task.autoSubmitOnPlayerTick() <= 0 && declaresClickHandler(task, Task.class);
+    interface ClientAccess {
+        SynchronizedState synchronizedState();
+
+        boolean connected();
+
+        void send(SubmitTaskMessage message);
+
+        void send(ClaimRewardMessage message);
+
+        boolean hasQuest(long questId);
+
+        void openArchive(long questId);
     }
 
-    private static boolean isDirectReward(Reward reward) {
-        return !(reward instanceof ChoiceReward) && declaresClickHandler(reward, Reward.class);
+    interface SynchronizedState {
+        boolean locked();
+
+        QuestState quest(long questId);
+
+        TaskState task(long taskId);
+
+        RewardState reward(long rewardId);
+    }
+
+    record QuestState(
+            long id,
+            String title,
+            String subtitle,
+            boolean teamComplete,
+            boolean startable,
+            List<Long> unmetDependencyIds,
+            List<TaskState> tasks,
+            List<RewardState> rewards) {
+        QuestState {
+            title = Objects.requireNonNull(title);
+            subtitle = Objects.requireNonNull(subtitle);
+            unmetDependencyIds = List.copyOf(Objects.requireNonNull(unmetDependencyIds));
+            tasks = List.copyOf(Objects.requireNonNull(tasks));
+            rewards = List.copyOf(Objects.requireNonNull(rewards));
+        }
+    }
+
+    record TaskState(
+            long id,
+            String title,
+            long currentValue,
+            long requiredValue,
+            boolean complete,
+            int autoSubmitOnPlayerTick,
+            boolean directInteractionSupported,
+            boolean submitEligible) {
+        TaskState {
+            title = Objects.requireNonNull(title);
+        }
+    }
+
+    record RewardState(
+            long id,
+            String title,
+            boolean claimed,
+            boolean choice,
+            boolean directInteractionSupported,
+            boolean claimEligible) {
+        RewardState {
+            title = Objects.requireNonNull(title);
+        }
+    }
+
+    private static final class FtbClientAccess implements ClientAccess {
+        @Override
+        public SynchronizedState synchronizedState() {
+            ClientQuestFile file = ClientQuestFile.INSTANCE;
+            if (file == null || !ClientQuestFile.exists()) {
+                return null;
+            }
+            Minecraft minecraft = Minecraft.getInstance();
+            LocalPlayer player = minecraft == null ? null : minecraft.player;
+            if (player == null) {
+                return null;
+            }
+            TeamData teamData = ClientQuestFile.INSTANCE.selfTeamData;
+            if (teamData == null) {
+                return null;
+            }
+            return new FtbSynchronizedState(file, teamData, player);
+        }
+
+        @Override
+        public boolean connected() {
+            Minecraft minecraft = Minecraft.getInstance();
+            return minecraft != null && minecraft.getConnection() != null;
+        }
+
+        @Override
+        public void send(SubmitTaskMessage message) {
+            PacketDistributor.sendToServer(message);
+        }
+
+        @Override
+        public void send(ClaimRewardMessage message) {
+            PacketDistributor.sendToServer(message);
+        }
+
+        @Override
+        public boolean hasQuest(long questId) {
+            ClientQuestFile file = ClientQuestFile.INSTANCE;
+            return file != null && file.getQuest(questId) != null;
+        }
+
+        @Override
+        public void openArchive(long questId) {
+            ClientQuestFile.openBookToQuestObject(questId);
+        }
+    }
+
+    private static final class FtbSynchronizedState implements SynchronizedState {
+        private final ClientQuestFile file;
+        private final TeamData teamData;
+        private final LocalPlayer player;
+
+        private FtbSynchronizedState(ClientQuestFile file, TeamData teamData, LocalPlayer player) {
+            this.file = file;
+            this.teamData = teamData;
+            this.player = player;
+        }
+
+        @Override
+        public boolean locked() {
+            return teamData.isLocked();
+        }
+
+        @Override
+        public QuestState quest(long questId) {
+            Quest quest = file.getQuest(questId);
+            if (quest == null) {
+                return null;
+            }
+            boolean startable = teamData.canStartTasks(quest);
+            List<Long> unmetDependencyIds = quest.streamDependencies()
+                    .filter(dependency -> !teamData.isCompleted(dependency))
+                    .map(QuestObject::getId)
+                    .toList();
+            List<TaskState> tasks = quest.getTasks().stream()
+                    .map(task -> taskState(task, startable))
+                    .toList();
+            List<RewardState> rewards = quest.getRewards().stream()
+                    .map(this::rewardState)
+                    .toList();
+            return new QuestState(
+                    quest.getId(),
+                    quest.getTitle().getString(),
+                    quest.getSubtitle().getString(),
+                    teamData.isCompleted(quest),
+                    startable,
+                    unmetDependencyIds,
+                    tasks,
+                    rewards);
+        }
+
+        @Override
+        public TaskState task(long taskId) {
+            Task task = file.getTask(taskId);
+            return task == null ? null : taskState(task, teamData.canStartTasks(task.getQuest()));
+        }
+
+        @Override
+        public RewardState reward(long rewardId) {
+            Reward reward = file.getReward(rewardId);
+            return reward == null ? null : rewardState(reward);
+        }
+
+        private TaskState taskState(Task task, boolean startable) {
+            boolean complete = teamData.isCompleted(task);
+            return new TaskState(
+                    task.getId(),
+                    task.getTitle().getString(),
+                    teamData.getProgress(task),
+                    task.getMaxProgress(),
+                    complete,
+                    task.autoSubmitOnPlayerTick(),
+                    declaresClickHandler(task, Task.class),
+                    startable && !complete && task.isValid());
+        }
+
+        private RewardState rewardState(Reward reward) {
+            boolean choice = reward instanceof ChoiceReward;
+            boolean claimed = teamData.isRewardClaimed(player.getUUID(), reward);
+            return new RewardState(
+                    reward.getId(),
+                    reward.getTitle().getString(),
+                    claimed,
+                    choice,
+                    !choice && declaresClickHandler(reward, Reward.class),
+                    !teamData.isRewardBlocked(reward)
+                            && teamData.getClaimType(player.getUUID(), reward).canClaim());
+        }
     }
 
     private static boolean declaresClickHandler(Object interaction, Class<?> supportedOwner) {
@@ -146,25 +347,5 @@ public final class FtbQuestGateway implements EchoQuestGateway {
         } catch (NoSuchMethodException exception) {
             return false;
         }
-    }
-
-    private static ClientState synchronizedState() {
-        ClientQuestFile file = ClientQuestFile.INSTANCE;
-        if (file == null || !ClientQuestFile.exists()) {
-            return null;
-        }
-        Minecraft minecraft = Minecraft.getInstance();
-        LocalPlayer player = minecraft == null ? null : minecraft.player;
-        if (player == null) {
-            return null;
-        }
-        TeamData teamData = ClientQuestFile.INSTANCE.selfTeamData;
-        if (teamData == null || teamData.isLocked()) {
-            return null;
-        }
-        return new ClientState(file, teamData, player);
-    }
-
-    private record ClientState(ClientQuestFile file, TeamData teamData, LocalPlayer player) {
     }
 }

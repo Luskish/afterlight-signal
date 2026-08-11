@@ -96,6 +96,20 @@ class EchoRouteLoaderTest {
     }
 
     @Test
+    void rejectsCrossSegmentDuplicateQuestIdsAfterUnsignedNormalization() {
+        RouteValidationException exception = assertInvalid("""
+                {"schema":1,"terminal_quest":"02","segments":[
+                  {"id":"root","after":[],"quests":["1"]},
+                  {"id":"memory","after":["root"],"quests":["0000000000000001","02"]}
+                ]}
+                """);
+
+        assertEquals(
+                List.of("duplicate quest ID 0000000000000001 at segments[1].quests[0]"),
+                exception.errors());
+    }
+
+    @Test
     void rejectsInvalidTerminalHexId() {
         RouteValidationException exception = assertInvalid("""
                 {"schema":1,"terminal_quest":"0x1","segments":[

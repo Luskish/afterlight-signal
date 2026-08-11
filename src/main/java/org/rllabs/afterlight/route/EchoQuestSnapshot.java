@@ -27,6 +27,7 @@ public record EchoQuestSnapshot(
             long requiredValue,
             boolean complete,
             boolean manualSubmit,
+            boolean directInteractionSupported,
             boolean submitEligible) {
         public TaskSnapshot {
             title = Objects.requireNonNull(title);
@@ -38,6 +39,7 @@ public record EchoQuestSnapshot(
             String title,
             boolean claimed,
             boolean choice,
+            boolean directInteractionSupported,
             boolean claimEligible) {
         public RewardSnapshot {
             title = Objects.requireNonNull(title);

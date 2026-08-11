@@ -10,14 +10,25 @@ public final class EchoRouteResolver {
         Objects.requireNonNull(snapshots);
 
         for (long questId : route.questIds()) {
+            if (!snapshots.containsKey(questId) || snapshots.get(questId) == null) {
+                return EchoRecommendation.signalUnavailable(questId);
+            }
+        }
+
+        for (long questId : route.questIds()) {
             EchoQuestSnapshot snapshot = snapshots.get(questId);
-            if (snapshot == null || !snapshot.teamComplete()) {
+            if (!snapshot.teamComplete()) {
                 continue;
             }
             for (EchoQuestSnapshot.RewardSnapshot reward : snapshot.rewards()) {
-                if (!reward.claimed()) {
-                    boolean requiresArchive = reward.choice() || !reward.claimEligible();
-                    return EchoRecommendation.claimReward(questId, reward.id(), requiresArchive);
+                if (reward.claimed()) {
+                    continue;
+                }
+                if (reward.choice() || !reward.directInteractionSupported()) {
+                    return EchoRecommendation.claimReward(questId, reward.id(), true);
+                }
+                if (reward.claimEligible()) {
+                    return EchoRecommendation.claimReward(questId, reward.id(), false);
                 }
             }
         }
@@ -30,6 +41,7 @@ public final class EchoRouteResolver {
             OptionalLong taskId = snapshot.tasks().stream()
                     .filter(task -> !task.complete())
                     .filter(EchoQuestSnapshot.TaskSnapshot::manualSubmit)
+                    .filter(EchoQuestSnapshot.TaskSnapshot::directInteractionSupported)
                     .filter(EchoQuestSnapshot.TaskSnapshot::submitEligible)
                     .mapToLong(EchoQuestSnapshot.TaskSnapshot::id)
                     .findFirst();
