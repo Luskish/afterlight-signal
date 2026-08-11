@@ -1,6 +1,7 @@
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.nio.file.Files
+import java.util.Locale
 import java.util.zip.ZipFile
 
 plugins {
@@ -55,14 +56,17 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
-dependencyLocking {
-    lockAllConfigurations()
+def operatingSystemName = System.getProperty('os.name').toLowerCase(Locale.ROOT)
+def dependencyLockPlatform = operatingSystemName.contains('mac')
+        ? 'macos'
+        : operatingSystemName.contains('linux') ? 'linux' : null
+if (dependencyLockPlatform == null) {
+    throw new GradleException("Unsupported dependency-lock platform: ${operatingSystemName}")
 }
 
-configurations.configureEach {
-    if (name == 'neoFormRuntimeDependenciesRuntimeClasspath') {
-        resolutionStrategy.deactivateDependencyLocking()
-    }
+dependencyLocking {
+    lockFile = file("gradle/dependency-locks/${dependencyLockPlatform}.lockfile")
+    lockAllConfigurations()
 }
 
 def releasePolicy = file('tools/ReleaseSourcePolicy.java')
