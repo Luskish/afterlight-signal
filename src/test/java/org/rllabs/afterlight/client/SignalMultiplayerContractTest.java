@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import com.mojang.authlib.minecraft.BanDetails;
 import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -18,6 +19,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
@@ -61,24 +63,27 @@ class SignalMultiplayerContractTest {
     }
 
     @Test
-    void enabledJoinHasNoDisabledReasonAndUsesActiveFocusDecoration() {
+    void enabledJoinHasNoDisabledReasonNarrationAndUsesActiveHoverDecoration() {
         ScreenFixture fixture = screen(new ClientState(true, true, ban(null), true));
         Button join = joinButton(fixture.screen());
+        NarrationCapture narration = screenNarration(fixture.screen());
 
         assertTrue(join.active);
         assertNull(join.getTooltip());
-        join.setFocused(true);
+        assertTrue(narration.entries(NarratedElementType.HINT).isEmpty());
+        setHovered(join, true);
         Decoration decoration = decoration(join);
         assertEquals(SIGNAL_CYAN, decoration.border());
         assertTrue(decoration.amberRail());
     }
 
     @Test
-    void inactiveJoinNeverUsesActiveFocusDecoration() {
+    void inactiveHoveredJoinNeverUsesActiveDecoration() {
         ScreenFixture fixture = screen(new ClientState(false, false, null, true));
         Button join = joinButton(fixture.screen());
 
-        join.setFocused(true);
+        assertFalse(join.isFocused());
+        setHovered(join, true);
         Decoration decoration = decoration(join);
         assertEquals(OXIDIZED_METAL, decoration.border());
         assertFalse(decoration.amberRail());
@@ -105,15 +110,37 @@ class SignalMultiplayerContractTest {
     private static void assertDisabledReason(ClientState state, String translationKey) {
         ScreenFixture fixture = screen(state);
         Button join = joinButton(fixture.screen());
-        NarrationCapture narration = new NarrationCapture();
+        String expectedReason = Component.translatable(translationKey).getString();
+        NarrationCapture tooltipNarration = new NarrationCapture();
 
         assertFalse(join.active);
+        assertFalse(join.isFocused());
         assertTrue(join.getTooltip() != null);
-        join.setFocused(true);
-        join.updateNarration(narration);
-        assertEquals(
-                List.of(Component.translatable(translationKey).getString()),
-                narration.entries(NarratedElementType.HINT));
+        join.getTooltip().updateNarration(tooltipNarration);
+        assertEquals(List.of(expectedReason), tooltipNarration.entries(NarratedElementType.HINT));
+        assertEquals(List.of(expectedReason), screenNarration(fixture.screen()).entries(NarratedElementType.HINT));
+    }
+
+    private static NarrationCapture screenNarration(SignalTitleScreen screen) {
+        try {
+            NarrationCapture narration = new NarrationCapture();
+            Method method = Screen.class.getDeclaredMethod("updateNarrationState", NarrationElementOutput.class);
+            method.setAccessible(true);
+            method.invoke(screen, narration);
+            return narration;
+        } catch (ReflectiveOperationException exception) {
+            return fail("Signal title narration must flow through Screen.updateNarrationState", exception);
+        }
+    }
+
+    private static void setHovered(AbstractWidget widget, boolean hovered) {
+        try {
+            Field field = AbstractWidget.class.getDeclaredField("isHovered");
+            field.setAccessible(true);
+            field.setBoolean(widget, hovered);
+        } catch (ReflectiveOperationException exception) {
+            fail("Signal button decoration must reflect native hover state", exception);
+        }
     }
 
     private static BanDetails ban(Instant expires) {

@@ -7,6 +7,8 @@ import net.minecraft.client.Options;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.gui.narration.NarratedElementType;
+import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 import net.minecraft.client.gui.screens.multiplayer.SafetyScreen;
@@ -29,6 +31,8 @@ public final class SignalTitleScreen extends Screen {
     private static final int RELIQUARY_AMBER = 0xFFD09B4D;
     private static final int PALE_SIGNAL = 0xFFC7D3D4;
     private final ClientAccess client;
+    @Nullable
+    private Component multiplayerDisabledReason;
 
     SignalTitleScreen() {
         this(new MinecraftClientAccess());
@@ -42,18 +46,26 @@ public final class SignalTitleScreen extends Screen {
     @Override
     protected void init() {
         MenuGeometry geometry = menuGeometry();
-        Component multiplayerDisabledReason = multiplayerDisabledReason();
+        this.multiplayerDisabledReason = multiplayerDisabledReason();
         int y = geometry.y();
         for (Destination destination : Destination.values()) {
             Button button = Button.builder(Component.literal(destination.label()), ignored -> open(destination))
                     .bounds(geometry.x(), y, geometry.width(), geometry.buttonHeight())
                     .build(SignalButton::new);
             if (destination == Destination.JOIN_EXPEDITION) {
-                button.active = multiplayerDisabledReason == null;
-                button.setTooltip(multiplayerDisabledReason == null ? null : Tooltip.create(multiplayerDisabledReason));
+                button.active = this.multiplayerDisabledReason == null;
+                button.setTooltip(this.multiplayerDisabledReason == null ? null : Tooltip.create(this.multiplayerDisabledReason));
             }
             this.addRenderableWidget(button);
             y += geometry.buttonHeight() + geometry.gap();
+        }
+    }
+
+    @Override
+    protected void updateNarrationState(NarrationElementOutput output) {
+        super.updateNarrationState(output);
+        if (this.multiplayerDisabledReason != null) {
+            output.add(NarratedElementType.HINT, this.multiplayerDisabledReason);
         }
     }
 
