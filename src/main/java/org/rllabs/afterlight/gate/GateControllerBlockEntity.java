@@ -4,6 +4,7 @@ import java.util.UUID;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
@@ -14,6 +15,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.status.ChunkStatus;
 import org.rllabs.afterlight.EchoContent;
 import org.rllabs.afterlight.gate.GateActivationService.ActivationCode;
 import org.rllabs.afterlight.gate.GateActivationService.ActivationDecision;
@@ -74,6 +76,16 @@ public final class GateControllerBlockEntity extends BlockEntity {
 
     ItemStack removeCore() {
         if (state == GateState.OPEN || coreStack.isEmpty()) {
+            return ItemStack.EMPTY;
+        }
+        ItemStack removed = coreStack;
+        coreStack = ItemStack.EMPTY;
+        setChanged();
+        return removed;
+    }
+
+    ItemStack extractCoreForRemoval() {
+        if (coreStack.isEmpty()) {
             return ItemStack.EMPTY;
         }
         ItemStack removed = coreStack;
@@ -184,7 +196,7 @@ public final class GateControllerBlockEntity extends BlockEntity {
                 controller.openDeadline,
                 serverLevel.getGameTime())) {
             controller.close();
-        } else if (!controller.validOpenState()) {
+        } else if (controller.requiredGateChunksLoaded() && !controller.validOpenState()) {
             controller.faultAndClose();
         }
     }
@@ -197,7 +209,7 @@ public final class GateControllerBlockEntity extends BlockEntity {
         }
         if (!ACTIVATION_SERVICE.shouldResumeOpen(state, openDeadline, serverLevel.getGameTime())) {
             close();
-        } else if (!validOpenState()) {
+        } else if (requiredGateChunksLoaded() && !validOpenState()) {
             faultAndClose();
         }
     }
@@ -266,6 +278,7 @@ public final class GateControllerBlockEntity extends BlockEntity {
 
     private boolean isOwnedField(BlockPos position) {
         if (!(level instanceof ServerLevel serverLevel)
+                || !isChunkLoaded(serverLevel, position)
                 || !serverLevel.getBlockState(position).is(EchoContent.GATE_FIELD.get())) {
             return false;
         }
@@ -290,13 +303,49 @@ public final class GateControllerBlockEntity extends BlockEntity {
         }
         for (GateLocalPos localPosition : GatePattern.interior(orientation)) {
             BlockPos fieldPosition = localPosition.toWorld(worldPosition, orientation);
+            if (!isChunkLoaded(serverLevel, fieldPosition)) {
+                continue;
+            }
             BlockEntity blockEntity = serverLevel.getBlockEntity(fieldPosition);
             if (serverLevel.getBlockState(fieldPosition).is(EchoContent.GATE_FIELD.get())
                     && blockEntity instanceof GateFieldBlockEntity field
                     && field.isOwnedBy(worldPosition, fieldId)) {
-                serverLevel.removeBlock(fieldPosition, false);
+                removeField(serverLevel, fieldPosition);
             }
         }
+    }
+
+    private static void removeField(ServerLevel level, BlockPos position) {
+        level.setBlock(
+                position,
+                level.getFluidState(position).createLegacyBlock(),
+                Block.UPDATE_CLIENTS | Block.UPDATE_KNOWN_SHAPE);
+    }
+
+    private boolean requiredGateChunksLoaded() {
+        if (!(level instanceof ServerLevel serverLevel) || orientation == null) {
+            return false;
+        }
+        for (GateLocalPos localPosition : GatePattern.expected(orientation).keySet()) {
+            if (!isChunkLoaded(serverLevel, localPosition.toWorld(worldPosition, orientation))) {
+                return false;
+            }
+        }
+        for (GateLocalPos localPosition : GatePattern.interior(orientation)) {
+            if (!isChunkLoaded(serverLevel, localPosition.toWorld(worldPosition, orientation))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isChunkLoaded(ServerLevel level, BlockPos position) {
+        return level.getChunkSource().getChunk(
+                        SectionPos.blockToSectionCoord(position.getX()),
+                        SectionPos.blockToSectionCoord(position.getZ()),
+                        ChunkStatus.FULL,
+                        false)
+                != null;
     }
 
     static boolean isGateCore(ItemStack stack) {

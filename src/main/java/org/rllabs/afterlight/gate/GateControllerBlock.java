@@ -14,6 +14,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Mirror;
 import net.minecraft.world.level.block.RenderShape;
@@ -139,7 +140,9 @@ public final class GateControllerBlock extends BaseEntityBlock {
         if (!level.isClientSide() && !state.is(newState.getBlock())) {
             BlockEntity blockEntity = level.getBlockEntity(position);
             if (blockEntity instanceof GateControllerBlockEntity controller) {
+                ItemStack storedCore = controller.extractCoreForRemoval();
                 controller.close();
+                Block.popResource(level, position, storedCore);
             }
         }
         super.onRemove(state, level, position, newState, movedByPiston);
