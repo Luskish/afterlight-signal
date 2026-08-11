@@ -4,9 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.mojang.brigadier.CommandDispatcher;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import io.netty.buffer.Unpooled;
@@ -18,31 +20,41 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import net.minecraft.commands.CommandSource;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.ConnectionProtocol;
 import net.minecraft.network.RegistryFriendlyByteBuf;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.PacketFlow;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Rarity;
+import net.minecraft.world.phys.Vec2;
+import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.attachment.AttachmentType;
+import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.network.registration.NetworkRegistry;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
 import org.junit.jupiter.api.Test;
 import org.rllabs.afterlight.Afterlight;
 import org.rllabs.afterlight.EchoContent;
 import org.rllabs.afterlight.client.AfterlightClient;
-import org.rllabs.afterlight.network.AfterlightPayloads;
 import org.rllabs.afterlight.network.OpenEchoRequest;
 import org.rllabs.afterlight.network.OpenEchoScreen;
 
 @SuppressWarnings("deprecation")
 class EchoRuntimeContractTest {
-    private static final ResourceLocation ECHO_ID = id("echo");
-    private static final ResourceLocation IDENTITY_ID = id("echo_identity");
-    private static final ResourceLocation BOND_ID = id("echo_bond");
+    private static final ResourceLocation ECHO_ID = ResourceLocation.parse("afterlight:echo");
+    private static final ResourceLocation IDENTITY_ID = ResourceLocation.parse("afterlight:echo_identity");
+    private static final ResourceLocation BOND_ID = ResourceLocation.parse("afterlight:echo_bond");
+    private static final ResourceLocation OPEN_REQUEST_ID = ResourceLocation.parse("afterlight:open_echo_request");
+    private static final ResourceLocation OPEN_SCREEN_ID = ResourceLocation.parse("afterlight:open_echo_screen");
 
     @Test
     void registersIdentityBondAndEchoItem() throws Exception {
@@ -78,8 +90,8 @@ class EchoRuntimeContractTest {
 
     @Test
     void payloadsUseExactIdsAndRequestOnlyTheHand() {
-        assertEquals(id("open_echo_request"), OpenEchoRequest.TYPE.id());
-        assertEquals(id("open_echo_screen"), OpenEchoScreen.TYPE.id());
+        assertEquals(OPEN_REQUEST_ID, OpenEchoRequest.TYPE.id());
+        assertEquals(OPEN_SCREEN_ID, OpenEchoScreen.TYPE.id());
         assertEquals(OpenEchoRequest.TYPE, new OpenEchoRequest(InteractionHand.OFF_HAND).type());
         assertEquals(OpenEchoScreen.TYPE, OpenEchoScreen.INSTANCE.type());
 
@@ -91,9 +103,33 @@ class EchoRuntimeContractTest {
     }
 
     @Test
-    void commandsExposeRequiredPermissionLevels() {
+    void payloadsAreRegisteredForExactPlayDirections() {
+        assertNotNull(NetworkRegistry.getCodec(OPEN_REQUEST_ID, ConnectionProtocol.PLAY, PacketFlow.SERVERBOUND));
+        assertNull(NetworkRegistry.getCodec(OPEN_REQUEST_ID, ConnectionProtocol.PLAY, PacketFlow.CLIENTBOUND));
+        assertNotNull(NetworkRegistry.getCodec(OPEN_SCREEN_ID, ConnectionProtocol.PLAY, PacketFlow.CLIENTBOUND));
+        assertNull(NetworkRegistry.getCodec(OPEN_SCREEN_ID, ConnectionProtocol.PLAY, PacketFlow.SERVERBOUND));
+    }
+
+    @Test
+    void commandsEnforceRequiredPermissionLevels() {
         assertEquals(0, EchoCommands.RECOVER_PERMISSION_LEVEL);
         assertEquals(2, EchoCommands.INSPECT_PERMISSION_LEVEL);
+
+        var dispatcher = new CommandDispatcher<CommandSourceStack>();
+        EchoCommands.register(dispatcher);
+        var echo = dispatcher.getRoot().getChild("echo");
+        assertNotNull(echo);
+        var recover = echo.getChild("recover");
+        var inspect = echo.getChild("inspect");
+        assertNotNull(recover);
+        assertNotNull(inspect);
+
+        assertFalse(recover.canUse(commandSource(-1)));
+        assertTrue(recover.canUse(commandSource(0)));
+        assertTrue(recover.canUse(commandSource(1)));
+        assertFalse(inspect.canUse(commandSource(0)));
+        assertFalse(inspect.canUse(commandSource(1)));
+        assertTrue(inspect.canUse(commandSource(2)));
     }
 
     @Test
@@ -118,32 +154,44 @@ class EchoRuntimeContractTest {
     }
 
     @Test
-    void commonRuntimeClassesContainNoClientReferences() throws Exception {
-        List<Class<?>> commonClasses = List.of(
-                Afterlight.class,
-                EchoContent.class,
-                EchoItem.class,
-                EchoRuntimeService.class,
-                EchoCommands.class,
-                EchoPlayerEvents.class,
-                AfterlightPayloads.class,
-                OpenEchoRequest.class,
-                OpenEchoScreen.class);
+    void everyCompiledCommonProductionClassContainsNoClientReferences() throws Exception {
+        Path productionClasses = Path.of("build/classes/java/main");
+        List<Path> classFiles;
+        try (var paths = Files.walk(productionClasses)) {
+            classFiles = paths.filter(path -> path.toString().endsWith(".class"))
+                    .filter(path -> !normalizedClassName(productionClasses, path)
+                            .startsWith("org/rllabs/afterlight/client/"))
+                    .toList();
+        }
+        assertFalse(classFiles.isEmpty());
 
-        for (Class<?> commonClass : commonClasses) {
-            String classBytes = new String(readClassBytes(commonClass), StandardCharsets.ISO_8859_1);
+        for (Path classFile : classFiles) {
+            String className = normalizedClassName(productionClasses, classFile);
+            String classBytes = new String(Files.readAllBytes(classFile), StandardCharsets.ISO_8859_1);
+            assertFalse(classBytes.contains("net/minecraft/client"), () -> className + " has slash client dependency");
+            assertFalse(classBytes.contains("net.minecraft.client"), () -> className + " has dotted client dependency");
             assertFalse(
-                    classBytes.contains("net/minecraft/client"),
-                    () -> commonClass.getName() + " references a client class");
+                    classBytes.contains("org/rllabs/afterlight/client"),
+                    () -> className + " has slash project client dependency");
+            assertFalse(
+                    classBytes.contains("org.rllabs.afterlight.client"),
+                    () -> className + " has dotted project client dependency");
         }
 
-        String echoItemBytes = new String(readClassBytes(EchoItem.class), StandardCharsets.ISO_8859_1);
+        String echoItemBytes = classBytes(EchoItem.class);
         assertFalse(echoItemBytes.contains("getInstance"));
 
         Mod clientEntrypoint = AfterlightClient.class.getAnnotation(Mod.class);
         assertNotNull(clientEntrypoint);
         assertArrayEquals(new Dist[] {Dist.CLIENT}, clientEntrypoint.dist());
         assertTrue(Modifier.isPublic(AfterlightClient.class.getModifiers()));
+    }
+
+    @Test
+    void commonEntrypointRegistersLogoutLifecycle() throws Exception {
+        assertNotNull(EchoPlayerEvents.class.getMethod(
+                "onPlayerLoggedOut", PlayerEvent.PlayerLoggedOutEvent.class));
+        assertTrue(classBytes(Afterlight.class).contains("onPlayerLoggedOut"));
     }
 
     @Test
@@ -177,15 +225,28 @@ class EchoRuntimeContractTest {
                 service.failureMessageKey(EchoRecoveryService.RecoveryStatus.GENERATION_EXHAUSTED));
     }
 
-    private static byte[] readClassBytes(Class<?> type) throws Exception {
+    private static String classBytes(Class<?> type) throws Exception {
         String resourceName = "/" + type.getName().replace('.', '/') + ".class";
         try (InputStream input = type.getResourceAsStream(resourceName)) {
             assertNotNull(input, resourceName);
-            return input.readAllBytes();
+            return new String(input.readAllBytes(), StandardCharsets.ISO_8859_1);
         }
     }
 
-    private static ResourceLocation id(String path) {
-        return ResourceLocation.fromNamespaceAndPath(Afterlight.MOD_ID, path);
+    private static String normalizedClassName(Path root, Path classFile) {
+        return root.relativize(classFile).toString().replace('\\', '/');
+    }
+
+    private static CommandSourceStack commandSource(int permissionLevel) {
+        return new CommandSourceStack(
+                CommandSource.NULL,
+                Vec3.ZERO,
+                Vec2.ZERO,
+                null,
+                permissionLevel,
+                "contract-test",
+                Component.literal("contract-test"),
+                null,
+                null);
     }
 }

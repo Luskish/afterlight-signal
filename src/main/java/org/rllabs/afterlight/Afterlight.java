@@ -14,6 +14,7 @@ public final class Afterlight {
         EchoContent.register(modBus);
         NeoForge.EVENT_BUS.addListener(EchoCommands::register);
         NeoForge.EVENT_BUS.addListener(EchoPlayerEvents::onPlayerLoggedIn);
+        NeoForge.EVENT_BUS.addListener(EchoPlayerEvents::onPlayerLoggedOut);
         NeoForge.EVENT_BUS.addListener(EchoPlayerEvents::onServerTick);
     }
 }
