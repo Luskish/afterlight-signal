@@ -94,6 +94,7 @@ public final class EchoContent {
             BlockBehaviour.Properties.of()
                     .noCollission()
                     .noOcclusion()
+                    .forceSolidOn()
                     .lightLevel(state -> 15)
                     .strength(-1.0F, 3_600_000.0F)
                     .noLootTable());
