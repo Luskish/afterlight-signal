@@ -1,9 +1,14 @@
 package org.rllabs.afterlight.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
@@ -66,6 +71,60 @@ class EchoScreenLayoutTest {
         assertEquals(Mode.COMPACT, EchoScreenLayout.compute(1277, 716, 4).mode());
     }
 
+    @Test
+    void requiredCompactLayoutUsesShortLabelsAndConfinedTextClips() throws Exception {
+        EchoScreenLayout layout = EchoScreenLayout.compute(214, 120, 1);
+        EchoScreenLayout.PaneLabels labels = layout.paneLabels();
+        JsonObject language = JsonParser.parseString(Files.readString(
+                        Path.of("src/main/resources/assets/afterlight/lang/en_us.json")))
+                .getAsJsonObject();
+
+        assertEquals(Mode.COMPACT, layout.mode());
+        assertEquals("LOG", language.get(labels.transcriptKey()).getAsString());
+        assertEquals("ROUTE", language.get(labels.routeKey()).getAsString());
+        assertEquals("STATE", language.get(labels.progressKey()).getAsString());
+
+        List<Rect> labeledPanes = List.of(layout.transcript(), layout.route(), layout.progress());
+        for (Rect pane : labeledPanes) {
+            Rect clip = layout.textClip(pane);
+            assertTrue(pane.contains(clip));
+            for (Rect other : layout.panes()) {
+                if (other != pane) {
+                    assertFalse(clip.overlaps(other));
+                }
+            }
+        }
+    }
+
+    @ParameterizedTest(name = "minimal {0}x{1} at GUI scale {2}")
+    @MethodSource("belowMinimumMatrix")
+    void belowMinimumLayoutsAreSafeAndContainOnlyClippedFaultLine(int width, int height, int guiScale) {
+        EchoScreenLayout layout = assertDoesNotThrow(() -> EchoScreenLayout.compute(width, height, guiScale));
+
+        assertEquals("MINIMAL", layout.mode().name());
+        assertTrue(layout.panes().isEmpty());
+        assertTrue(layout.actionButtons().isEmpty());
+        assertInsideViewport(layout.faultLine(), layout.logicalWidth(), layout.logicalHeight());
+    }
+
+    @Test
+    void supportedMinimumConfinesOrHidesEveryLabelAndBodyLine() {
+        EchoScreenLayout layout = EchoScreenLayout.compute(96, 80, 1);
+
+        assertEquals(Mode.COMPACT, layout.mode());
+        for (Rect pane : List.of(layout.header(), layout.transcript(), layout.route(), layout.progress())) {
+            Rect clip = layout.textClip(pane);
+            assertTrue(pane.contains(clip));
+            for (int y : List.of(pane.y() + 4, pane.y() + 13, pane.y() + 15)) {
+                boolean visible = layout.canRenderTextLine(pane, y, 9);
+                if (visible) {
+                    assertTrue(y >= clip.y());
+                    assertTrue(y + 9 <= clip.bottom());
+                }
+            }
+        }
+    }
+
     private static Stream<Arguments> requiredResolutionMatrix() {
         return Stream.of(854, 1280, 1920).flatMap(width -> {
             int height = switch (width) {
@@ -77,11 +136,30 @@ class EchoScreenLayoutTest {
         });
     }
 
+    private static Stream<Arguments> belowMinimumMatrix() {
+        return Stream.of(
+                Arguments.of(95, 79, 1),
+                Arguments.of(32, 24, 1),
+                Arguments.of(1, 1, 1),
+                Arguments.of(0, 0, 1),
+                Arguments.of(1, 1, Integer.MAX_VALUE),
+                Arguments.of(0, 0, Integer.MAX_VALUE));
+    }
+
     private static void assertOnScreen(Rect rect, int width, int height) {
         assertTrue(rect.x() >= 0);
         assertTrue(rect.y() >= 0);
         assertTrue(rect.width() > 0);
         assertTrue(rect.height() > 0);
+        assertTrue(rect.right() <= width);
+        assertTrue(rect.bottom() <= height);
+    }
+
+    private static void assertInsideViewport(Rect rect, int width, int height) {
+        assertTrue(rect.x() >= 0);
+        assertTrue(rect.y() >= 0);
+        assertTrue(rect.width() >= 0);
+        assertTrue(rect.height() >= 0);
         assertTrue(rect.right() <= width);
         assertTrue(rect.bottom() <= height);
     }

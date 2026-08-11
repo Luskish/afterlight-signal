@@ -20,6 +20,9 @@ public record EchoScreenLayout(
     private static final int WIDE_MIN_HEIGHT = 300;
     private static final int COMPACT_MIN_WIDTH = 320;
     private static final int COMPACT_MIN_HEIGHT = 180;
+    private static final int MINIMUM_WIDTH = 96;
+    private static final int MINIMUM_HEIGHT = 80;
+    private static final Rect EMPTY_RECT = new Rect(0, 0, 0, 0);
 
     public EchoScreenLayout {
         mode = Objects.requireNonNull(mode);
@@ -32,13 +35,20 @@ public record EchoScreenLayout(
     }
 
     public static EchoScreenLayout compute(int framebufferWidth, int framebufferHeight, int guiScale) {
-        if (framebufferWidth <= 0 || framebufferHeight <= 0 || guiScale <= 0) {
-            throw new IllegalArgumentException("Framebuffer dimensions and GUI scale must be positive");
-        }
-        int logicalWidth = ceilDivide(framebufferWidth, guiScale);
-        int logicalHeight = ceilDivide(framebufferHeight, guiScale);
-        if (logicalWidth < 96 || logicalHeight < 80) {
-            throw new IllegalArgumentException("Logical screen is too small for accessible controls");
+        int safeScale = Math.max(1, guiScale);
+        int logicalWidth = ceilDivide(Math.max(0, framebufferWidth), safeScale);
+        int logicalHeight = ceilDivide(Math.max(0, framebufferHeight), safeScale);
+        if (logicalWidth < MINIMUM_WIDTH || logicalHeight < MINIMUM_HEIGHT) {
+            return new EchoScreenLayout(
+                    logicalWidth,
+                    logicalHeight,
+                    Mode.MINIMAL,
+                    EMPTY_RECT,
+                    EMPTY_RECT,
+                    EMPTY_RECT,
+                    EMPTY_RECT,
+                    EMPTY_RECT,
+                    List.of());
         }
 
         Mode mode = mode(logicalWidth, logicalHeight);
@@ -53,7 +63,51 @@ public record EchoScreenLayout(
     }
 
     public List<Rect> panes() {
+        if (mode == Mode.MINIMAL) {
+            return List.of();
+        }
         return List.of(header, transcript, route, progress, actionRail);
+    }
+
+    public PaneLabels paneLabels() {
+        if (mode == Mode.COMPACT) {
+            return new PaneLabels(
+                    "screen.afterlight.echo.pane.log",
+                    "screen.afterlight.echo.pane.route.compact",
+                    "screen.afterlight.echo.pane.state");
+        }
+        return new PaneLabels(
+                "screen.afterlight.echo.pane.transcript",
+                "screen.afterlight.echo.pane.route",
+                "screen.afterlight.echo.pane.progress");
+    }
+
+    public Rect textClip(Rect pane) {
+        Objects.requireNonNull(pane);
+        int horizontalInset = Math.min(2, pane.width() / 2);
+        int verticalInset = Math.min(2, pane.height() / 2);
+        return new Rect(
+                pane.x() + horizontalInset,
+                pane.y() + verticalInset,
+                Math.max(0, pane.width() - horizontalInset * 2),
+                Math.max(0, pane.height() - verticalInset * 2));
+    }
+
+    public boolean canRenderTextLine(Rect pane, int y, int lineHeight) {
+        Rect clip = textClip(pane);
+        return lineHeight > 0
+                && clip.width() > 0
+                && clip.height() > 0
+                && y >= clip.y()
+                && y + lineHeight <= clip.bottom();
+    }
+
+    public Rect faultLine() {
+        if (mode != Mode.MINIMAL || logicalWidth == 0 || logicalHeight == 0) {
+            return EMPTY_RECT;
+        }
+        int height = Math.min(9, logicalHeight);
+        return new Rect(0, Math.max(0, (logicalHeight - height) / 2), logicalWidth, height);
     }
 
     private static EchoScreenLayout computeWide(
@@ -178,13 +232,22 @@ public record EchoScreenLayout(
     public enum Mode {
         WIDE,
         STANDARD,
-        COMPACT
+        COMPACT,
+        MINIMAL
+    }
+
+    public record PaneLabels(String transcriptKey, String routeKey, String progressKey) {
+        public PaneLabels {
+            Objects.requireNonNull(transcriptKey);
+            Objects.requireNonNull(routeKey);
+            Objects.requireNonNull(progressKey);
+        }
     }
 
     public record Rect(int x, int y, int width, int height) {
         public Rect {
-            if (width <= 0 || height <= 0) {
-                throw new IllegalArgumentException("Rectangle dimensions must be positive");
+            if (width < 0 || height < 0) {
+                throw new IllegalArgumentException("Rectangle dimensions cannot be negative");
             }
         }
 

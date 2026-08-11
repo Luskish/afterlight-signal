@@ -15,6 +15,8 @@ import org.rllabs.afterlight.client.EchoScreenLayout.Rect;
 import org.rllabs.afterlight.client.EchoScreenModel.Action;
 import org.rllabs.afterlight.integration.EchoQuestGateway;
 import org.rllabs.afterlight.route.EchoQuestSnapshot;
+import org.rllabs.afterlight.route.EchoQuestSnapshot.RewardSnapshot;
+import org.rllabs.afterlight.route.EchoQuestSnapshot.TaskSnapshot;
 import org.rllabs.afterlight.route.EchoRecommendation;
 import org.rllabs.afterlight.route.EchoRoute;
 import org.rllabs.afterlight.route.EchoRouteResolver;
@@ -65,6 +67,9 @@ public class EchoScreen extends Screen {
         int guiScale = Math.max(1, (int) Math.round(minecraft.getWindow().getGuiScale()));
         layout = EchoScreenLayout.compute(framebufferWidth, framebufferHeight, guiScale);
         actionButtons.clear();
+        if (layout.mode() == EchoScreenLayout.Mode.MINIMAL) {
+            return;
+        }
         addActionButton(Action.SUBMIT, Component.translatable("screen.afterlight.echo.action.submit"), 0);
         addActionButton(Action.CLAIM, Component.translatable("screen.afterlight.echo.action.claim"), 1);
         addActionButton(Action.PIN, model.pinLabel(), 2);
@@ -75,20 +80,8 @@ public class EchoScreen extends Screen {
     @Override
     public void tick() {
         if (route != null) {
-            Map<Long, EchoQuestSnapshot> previousSnapshots = snapshots;
-            EchoScreenModel nextModel = refreshModel();
-            if (pendingMutation != null) {
-                if (!previousSnapshots.equals(snapshots)) {
-                    pendingMutation = null;
-                } else if (pendingMutation.ticksRemaining() <= 1) {
-                    pendingMutation = null;
-                } else {
-                    pendingMutation = new PendingMutation(
-                            pendingMutation.action(),
-                            pendingMutation.ticksRemaining() - 1);
-                }
-            }
-            model = nextModel;
+            model = refreshModel();
+            advancePendingMutation();
         }
         updateButtons();
     }
@@ -97,6 +90,10 @@ public class EchoScreen extends Screen {
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         super.render(graphics, mouseX, mouseY, partialTick);
         if (layout == null) {
+            return;
+        }
+        if (layout.mode() == EchoScreenLayout.Mode.MINIMAL) {
+            renderMinimalFault(graphics);
             return;
         }
         renderHeader(graphics);
@@ -115,6 +112,9 @@ public class EchoScreen extends Screen {
         graphics.blit(PANEL_TEXTURE, 0, 0, width, height, 0.0F, 0.0F, 256, 256, 256, 256);
         graphics.fill(0, 0, width, height, 0x62030506);
         if (layout == null) {
+            return;
+        }
+        if (layout.mode() == EchoScreenLayout.Mode.MINIMAL) {
             return;
         }
         drawPane(graphics, layout.header(), 0xD0030506, CYAN);
@@ -138,28 +138,142 @@ public class EchoScreen extends Screen {
         if (!isActionEnabled(action)) {
             return;
         }
+        OptionalLong targetId = targetId(action);
+        if (targetId.isEmpty()) {
+            return;
+        }
+        long exactTargetId = targetId.getAsLong();
+        MutationFingerprint fingerprint = fingerprint(action, exactTargetId);
+        if (!fingerprint.exists()) {
+            return;
+        }
         switch (action) {
-            case SUBMIT -> model.selectedTaskId().ifPresent(gateway::submit);
-            case CLAIM -> model.selectedRewardId().ifPresent(gateway::claim);
-            case PIN -> model.selectedQuestId().ifPresent(gateway::togglePin);
-            case ARCHIVE -> model.selectedQuestId().ifPresent(gateway::openArchive);
+            case SUBMIT -> gateway.submit(exactTargetId);
+            case CLAIM -> gateway.claim(exactTargetId);
+            case PIN -> gateway.togglePin(exactTargetId);
+            case ARCHIVE -> gateway.openArchive(exactTargetId);
         }
         if (action != Action.ARCHIVE) {
-            pendingMutation = new PendingMutation(action, MUTATION_COOLDOWN_TICKS);
+            pendingMutation = new PendingMutation(
+                    action,
+                    exactTargetId,
+                    fingerprint,
+                    MUTATION_COOLDOWN_TICKS);
         }
         updateButtons();
     }
 
     boolean isActionEnabled(Action action) {
         return model.action(action).enabled()
-                && (pendingMutation == null || pendingMutation.action() != action);
+                && !isPendingForCurrentTarget(action);
     }
 
     private EchoScreenModel refreshModel() {
-        Map<Long, EchoQuestSnapshot> refreshed = gateway.snapshots(route);
-        snapshots = Map.copyOf(refreshed);
+        try {
+            snapshots = normalizeSnapshots(gateway.snapshots(route));
+        } catch (RuntimeException exception) {
+            snapshots = Map.of();
+        }
         EchoRecommendation recommendation = resolver.resolve(route, snapshots);
         return EchoScreenModel.from(route, snapshots, recommendation);
+    }
+
+    private void advancePendingMutation() {
+        if (pendingMutation == null) {
+            return;
+        }
+        MutationFingerprint synchronizedFingerprint = fingerprint(
+                pendingMutation.action(),
+                pendingMutation.targetId());
+        if (model.kind() == EchoRecommendation.Kind.SIGNAL_UNAVAILABLE
+                || !synchronizedFingerprint.exists()
+                || !pendingMutation.fingerprint().equals(synchronizedFingerprint)
+                || pendingMutation.ticksRemaining() <= 1) {
+            pendingMutation = null;
+            return;
+        }
+        pendingMutation = new PendingMutation(
+                pendingMutation.action(),
+                pendingMutation.targetId(),
+                pendingMutation.fingerprint(),
+                pendingMutation.ticksRemaining() - 1);
+    }
+
+    private boolean isPendingForCurrentTarget(Action action) {
+        if (pendingMutation == null || pendingMutation.action() != action) {
+            return false;
+        }
+        OptionalLong currentTarget = targetId(action);
+        return currentTarget.isPresent() && currentTarget.getAsLong() == pendingMutation.targetId();
+    }
+
+    private OptionalLong targetId(Action action) {
+        return switch (action) {
+            case SUBMIT -> model.selectedTaskId();
+            case CLAIM -> model.selectedRewardId();
+            case PIN, ARCHIVE -> model.selectedQuestId();
+        };
+    }
+
+    private MutationFingerprint fingerprint(Action action, long targetId) {
+        return switch (action) {
+            case PIN, ARCHIVE -> {
+                EchoQuestSnapshot quest = snapshots.get(targetId);
+                boolean exists = quest != null && quest.questId() == targetId;
+                yield new PinFingerprint(exists, exists && quest.pinned());
+            }
+            case SUBMIT -> {
+                TaskSnapshot task = findTask(targetId);
+                yield task == null
+                        ? SubmitFingerprint.MISSING
+                        : new SubmitFingerprint(
+                                true,
+                                task.currentValue(),
+                                task.requiredValue(),
+                                task.complete(),
+                                task.directInteractionSupported(),
+                                task.submitEligible());
+            }
+            case CLAIM -> {
+                RewardSnapshot reward = findReward(targetId);
+                yield reward == null
+                        ? ClaimFingerprint.MISSING
+                        : new ClaimFingerprint(
+                                true,
+                                reward.claimed(),
+                                reward.directInteractionSupported(),
+                                reward.choice(),
+                                reward.claimEligible());
+            }
+        };
+    }
+
+    private TaskSnapshot findTask(long targetId) {
+        return snapshots.values().stream()
+                .flatMap(snapshot -> snapshot.tasks().stream())
+                .filter(task -> task.id() == targetId)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private RewardSnapshot findReward(long targetId) {
+        return snapshots.values().stream()
+                .flatMap(snapshot -> snapshot.rewards().stream())
+                .filter(reward -> reward.id() == targetId)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static Map<Long, EchoQuestSnapshot> normalizeSnapshots(Map<Long, EchoQuestSnapshot> rawSnapshots) {
+        if (rawSnapshots == null) {
+            return Map.of();
+        }
+        for (Map.Entry<Long, EchoQuestSnapshot> entry : rawSnapshots.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null) {
+                return Map.of();
+            }
+        }
+        return Map.copyOf(rawSnapshots);
     }
 
     private void addActionButton(Action action, Component label, int index) {
@@ -182,13 +296,13 @@ public class EchoScreen extends Screen {
 
     private void renderHeader(GuiGraphics graphics) {
         Rect pane = layout.header();
-        graphics.drawString(font, title, pane.x() + 5, pane.y() + 4, opaque(CYAN), false);
+        drawClippedLine(graphics, title, pane, pane.y() + 4, CYAN);
         drawWrapped(graphics, IDENTITY, pane, pane.y() + 15, BONE);
     }
 
     private void renderTranscript(GuiGraphics graphics) {
         Rect pane = layout.transcript();
-        drawPaneLabel(graphics, pane, Component.translatable("screen.afterlight.echo.pane.transcript"), CYAN);
+        drawPaneLabel(graphics, pane, Component.translatable(layout.paneLabels().transcriptKey()), CYAN);
         int y = pane.y() + 15;
         y = drawWrapped(graphics, model.stateLabel(), pane, y, model.kind() == EchoRecommendation.Kind.SIGNAL_UNAVAILABLE ? FAULT : AMBER);
         drawWrapped(graphics, model.diagnostic(), pane, y + 3, BONE);
@@ -196,24 +310,23 @@ public class EchoScreen extends Screen {
 
     private void renderRoute(GuiGraphics graphics) {
         Rect pane = layout.route();
-        drawPaneLabel(graphics, pane, Component.translatable("screen.afterlight.echo.pane.route"), BONE);
+        drawPaneLabel(graphics, pane, Component.translatable(layout.paneLabels().routeKey()), BONE);
         int y = pane.y() + (pane.height() < 34 ? 13 : 15);
         y = drawWrapped(graphics, model.questTitle(), pane, y, CYAN);
         y = drawWrapped(graphics, model.questSubtitle(), pane, y + 2, BONE);
         if (model.selectedQuestId().isPresent() && y + 9 < pane.bottom() - 3) {
-            graphics.drawString(
-                    font,
+            drawClippedLine(
+                    graphics,
                     Component.literal("Q//" + EchoRoute.formatQuestId(model.selectedQuestId().getAsLong())),
-                    pane.x() + 5,
+                    pane,
                     y + 3,
-                    opaque(AMBER),
-                    false);
+                    AMBER);
         }
     }
 
     private void renderProgress(GuiGraphics graphics) {
         Rect pane = layout.progress();
-        drawPaneLabel(graphics, pane, Component.translatable("screen.afterlight.echo.pane.progress"), CYAN);
+        drawPaneLabel(graphics, pane, Component.translatable(layout.paneLabels().progressKey()), CYAN);
         int y = pane.y() + (pane.height() < 34 ? 13 : 15);
         Component routeProgress = Component.translatable(
                 "screen.afterlight.echo.route.progress",
@@ -237,15 +350,29 @@ public class EchoScreen extends Screen {
     }
 
     private void drawPaneLabel(GuiGraphics graphics, Rect pane, Component label, int color) {
-        graphics.drawString(font, label, pane.x() + 5, pane.y() + 4, opaque(color), false);
+        drawClippedLine(graphics, label, pane, pane.y() + 4, color);
+    }
+
+    private void drawClippedLine(GuiGraphics graphics, Component text, Rect pane, int y, int color) {
+        if (!layout.canRenderTextLine(pane, y, font.lineHeight)) {
+            return;
+        }
+        Rect clip = layout.textClip(pane);
+        graphics.enableScissor(clip.x(), clip.y(), clip.right(), clip.bottom());
+        graphics.drawString(font, text, pane.x() + 5, y, opaque(color), false);
+        graphics.disableScissor();
     }
 
     private int drawWrapped(GuiGraphics graphics, Component text, Rect pane, int y, int color) {
         int textWidth = Math.max(1, pane.width() - 10);
         int currentY = y;
-        graphics.enableScissor(pane.x() + 2, pane.y() + 2, pane.right() - 2, pane.bottom() - 2);
+        Rect clip = layout.textClip(pane);
+        if (clip.width() == 0 || clip.height() == 0) {
+            return currentY;
+        }
+        graphics.enableScissor(clip.x(), clip.y(), clip.right(), clip.bottom());
         for (var line : font.split(text, textWidth)) {
-            if (currentY + font.lineHeight > pane.bottom() - 3) {
+            if (!layout.canRenderTextLine(pane, currentY, font.lineHeight)) {
                 break;
             }
             graphics.drawString(font, line, pane.x() + 5, currentY, opaque(color), false);
@@ -253,6 +380,21 @@ public class EchoScreen extends Screen {
         }
         graphics.disableScissor();
         return currentY;
+    }
+
+    private void renderMinimalFault(GuiGraphics graphics) {
+        Rect faultLine = layout.faultLine();
+        if (faultLine.width() == 0 || faultLine.height() == 0) {
+            return;
+        }
+        graphics.enableScissor(faultLine.x(), faultLine.y(), faultLine.right(), faultLine.bottom());
+        graphics.drawCenteredString(
+                font,
+                Component.translatable("screen.afterlight.echo.state.unavailable"),
+                layout.logicalWidth() / 2,
+                faultLine.y(),
+                opaque(FAULT));
+        graphics.disableScissor();
     }
 
     private static void drawPane(GuiGraphics graphics, Rect pane, int background, int border) {
@@ -272,6 +414,40 @@ public class EchoScreen extends Screen {
         return 0xFF000000 | color;
     }
 
-    private record PendingMutation(Action action, int ticksRemaining) {
+    private record PendingMutation(
+            Action action,
+            long targetId,
+            MutationFingerprint fingerprint,
+            int ticksRemaining) {
+        private PendingMutation {
+            Objects.requireNonNull(action);
+            Objects.requireNonNull(fingerprint);
+        }
+    }
+
+    private sealed interface MutationFingerprint permits PinFingerprint, SubmitFingerprint, ClaimFingerprint {
+        boolean exists();
+    }
+
+    private record PinFingerprint(boolean exists, boolean pinned) implements MutationFingerprint {
+    }
+
+    private record SubmitFingerprint(
+            boolean exists,
+            long currentValue,
+            long requiredValue,
+            boolean complete,
+            boolean supported,
+            boolean eligible) implements MutationFingerprint {
+        private static final SubmitFingerprint MISSING = new SubmitFingerprint(false, 0L, 0L, false, false, false);
+    }
+
+    private record ClaimFingerprint(
+            boolean exists,
+            boolean claimed,
+            boolean supported,
+            boolean choice,
+            boolean eligible) implements MutationFingerprint {
+        private static final ClaimFingerprint MISSING = new ClaimFingerprint(false, false, false, false, false);
     }
 }

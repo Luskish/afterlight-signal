@@ -1,25 +1,33 @@
 package org.rllabs.afterlight.client;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Field;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.rllabs.afterlight.client.EchoScreenModel.Action;
 import org.rllabs.afterlight.integration.EchoQuestGateway;
 import org.rllabs.afterlight.route.EchoQuestSnapshot;
 import org.rllabs.afterlight.route.EchoQuestSnapshot.RewardSnapshot;
 import org.rllabs.afterlight.route.EchoQuestSnapshot.TaskSnapshot;
+import org.rllabs.afterlight.route.EchoRecommendation.Kind;
 import org.rllabs.afterlight.route.EchoRoute;
 
 class EchoScreenActionTest {
     private static final long QUEST_ID = 0x11L;
+    private static final long OTHER_QUEST_ID = 0x12L;
     private static final long TASK_ID = 0x21L;
     private static final long REWARD_ID = 0x31L;
+    private static final long OTHER_REWARD_ID = 0x32L;
 
     @Test
     void submitDelegatesOnlyToGatewayAndDisablesImmediately() {
@@ -99,18 +107,134 @@ class EchoScreenActionTest {
         assertTrue(screen.isActionEnabled(Action.SUBMIT));
     }
 
+    @Test
+    void pinCooldownIgnoresUnrelatedQuestChangesAndClearsForSelectedQuest() {
+        FakeGateway gateway = new FakeGateway(twoQuestSnapshots(submitSnapshot(0L, false), false));
+        EchoScreen screen = new EchoScreen(twoQuestRoute(), gateway);
+
+        screen.activate(Action.PIN);
+        gateway.snapshots = twoQuestSnapshots(submitSnapshot(0L, false), true);
+        screen.tick();
+        screen.activate(Action.PIN);
+
+        assertFalse(screen.isActionEnabled(Action.PIN));
+        assertEquals(List.of(QUEST_ID), gateway.pins);
+
+        gateway.snapshots = twoQuestSnapshots(submitSnapshot(0L, true), true);
+        screen.tick();
+
+        assertTrue(screen.isActionEnabled(Action.PIN));
+        screen.activate(Action.PIN);
+
+        assertFalse(screen.isActionEnabled(Action.PIN));
+        assertEquals(List.of(QUEST_ID, QUEST_ID), gateway.pins);
+    }
+
+    @Test
+    void submitCooldownIgnoresUnrelatedQuestChangesAndClearsForExactTaskProgress() {
+        FakeGateway gateway = new FakeGateway(twoQuestSnapshots(submitSnapshot(0L), false));
+        EchoScreen screen = new EchoScreen(twoQuestRoute(), gateway);
+
+        screen.activate(Action.SUBMIT);
+        gateway.snapshots = twoQuestSnapshots(submitSnapshot(0L), true);
+        screen.tick();
+        screen.activate(Action.SUBMIT);
+
+        assertFalse(screen.isActionEnabled(Action.SUBMIT));
+        assertEquals(List.of(TASK_ID), gateway.submissions);
+
+        gateway.snapshots = twoQuestSnapshots(submitSnapshot(1L), true);
+        screen.tick();
+
+        assertTrue(screen.isActionEnabled(Action.SUBMIT));
+        screen.activate(Action.SUBMIT);
+
+        assertFalse(screen.isActionEnabled(Action.SUBMIT));
+        assertEquals(List.of(TASK_ID, TASK_ID), gateway.submissions);
+    }
+
+    @Test
+    void claimCooldownIgnoresUnrelatedQuestChangesAndClearsForExactRewardState() {
+        FakeGateway gateway = new FakeGateway(twoQuestSnapshots(claimSnapshot(false), false));
+        EchoScreen screen = new EchoScreen(twoQuestRoute(), gateway);
+
+        screen.activate(Action.CLAIM);
+        gateway.snapshots = twoQuestSnapshots(claimSnapshot(false), true);
+        screen.tick();
+        screen.activate(Action.CLAIM);
+
+        assertFalse(screen.isActionEnabled(Action.CLAIM));
+        assertEquals(List.of(REWARD_ID), gateway.claims);
+
+        gateway.snapshots = twoQuestSnapshots(claimSnapshot(true), true);
+        screen.tick();
+
+        assertTrue(screen.isActionEnabled(Action.CLAIM));
+        screen.activate(Action.CLAIM);
+
+        assertFalse(screen.isActionEnabled(Action.CLAIM));
+        assertEquals(List.of(REWARD_ID, OTHER_REWARD_ID), gateway.claims);
+    }
+
+    @ParameterizedTest
+    @EnumSource(InvalidSnapshots.class)
+    void malformedInitialSnapshotsDegradeToUnavailableWithoutMutation(InvalidSnapshots invalid) throws Exception {
+        FakeGateway gateway = new FakeGateway(Map.of());
+        invalid.configure(gateway);
+
+        EchoScreen screen = assertDoesNotThrow(() -> new EchoScreen(route(), gateway));
+
+        assertUnavailable(screen);
+        activateEveryAction(screen);
+        assertEquals(0, gateway.mutationCount());
+    }
+
+    @ParameterizedTest
+    @EnumSource(InvalidSnapshots.class)
+    void malformedTickSnapshotsDiscardActionableStateWithoutMutation(InvalidSnapshots invalid) throws Exception {
+        FakeGateway gateway = new FakeGateway(Map.of(QUEST_ID, submitSnapshot(0L)));
+        EchoScreen screen = new EchoScreen(route(), gateway);
+        assertTrue(screen.isActionEnabled(Action.SUBMIT));
+        invalid.configure(gateway);
+
+        assertDoesNotThrow(screen::tick);
+
+        assertUnavailable(screen);
+        activateEveryAction(screen);
+        assertEquals(0, gateway.mutationCount());
+    }
+
     private static EchoRoute route() {
         return new EchoRoute(1, QUEST_ID, List.of(new EchoRoute.Segment("root", List.of(), List.of(QUEST_ID))));
     }
 
+    private static EchoRoute twoQuestRoute() {
+        return new EchoRoute(
+                1,
+                OTHER_QUEST_ID,
+                List.of(new EchoRoute.Segment("root", List.of(), List.of(QUEST_ID, OTHER_QUEST_ID))));
+    }
+
+    private static Map<Long, EchoQuestSnapshot> twoQuestSnapshots(
+            EchoQuestSnapshot selected,
+            boolean otherPinned) {
+        return Map.of(
+                QUEST_ID, selected,
+                OTHER_QUEST_ID, unrelatedSnapshot(otherPinned));
+    }
+
     private static EchoQuestSnapshot submitSnapshot(long currentValue) {
+        return submitSnapshot(currentValue, false);
+    }
+
+    private static EchoQuestSnapshot submitSnapshot(long currentValue, boolean pinned) {
         return new EchoQuestSnapshot(
                 QUEST_ID,
                 "Signal Trace",
                 "Recover the missing carrier",
                 false,
                 true,
-                false,
+                pinned,
                 List.of(),
                 List.of(new TaskSnapshot(
                         TASK_ID,
@@ -125,6 +249,10 @@ class EchoScreenActionTest {
     }
 
     private static EchoQuestSnapshot claimSnapshot() {
+        return claimSnapshot(false);
+    }
+
+    private static EchoQuestSnapshot claimSnapshot(boolean firstClaimed) {
         return new EchoQuestSnapshot(
                 QUEST_ID,
                 "Signal Trace",
@@ -134,11 +262,44 @@ class EchoScreenActionTest {
                 false,
                 List.of(),
                 List.of(),
-                List.of(new RewardSnapshot(REWARD_ID, "Recovered signal", false, false, true, true)));
+                List.of(
+                        new RewardSnapshot(REWARD_ID, "Recovered signal", firstClaimed, false, true, true),
+                        new RewardSnapshot(OTHER_REWARD_ID, "Reserve signal", false, false, true, true)));
+    }
+
+    private static EchoQuestSnapshot unrelatedSnapshot(boolean pinned) {
+        return new EchoQuestSnapshot(
+                OTHER_QUEST_ID,
+                "Secondary Trace",
+                "Await the primary carrier",
+                false,
+                false,
+                pinned,
+                List.of(QUEST_ID),
+                List.of(),
+                List.of());
+    }
+
+    private static void activateEveryAction(EchoScreen screen) {
+        for (Action action : Action.values()) {
+            screen.activate(action);
+        }
+    }
+
+    private static void assertUnavailable(EchoScreen screen) throws Exception {
+        Field modelField = EchoScreen.class.getDeclaredField("model");
+        modelField.setAccessible(true);
+        EchoScreenModel model = (EchoScreenModel) modelField.get(screen);
+
+        assertEquals(Kind.SIGNAL_UNAVAILABLE, model.kind());
+        for (Action action : Action.values()) {
+            assertFalse(screen.isActionEnabled(action));
+        }
     }
 
     private static final class FakeGateway implements EchoQuestGateway {
         private Map<Long, EchoQuestSnapshot> snapshots;
+        private RuntimeException snapshotFailure;
         private final List<Long> submissions = new ArrayList<>();
         private final List<Long> claims = new ArrayList<>();
         private final List<Long> pins = new ArrayList<>();
@@ -150,6 +311,9 @@ class EchoScreenActionTest {
 
         @Override
         public Map<Long, EchoQuestSnapshot> snapshots(EchoRoute route) {
+            if (snapshotFailure != null) {
+                throw snapshotFailure;
+            }
             return snapshots;
         }
 
@@ -172,5 +336,44 @@ class EchoScreenActionTest {
         public void openArchive(long questId) {
             archives.add(questId);
         }
+
+        private int mutationCount() {
+            return submissions.size() + claims.size() + pins.size() + archives.size();
+        }
+    }
+
+    private enum InvalidSnapshots {
+        NULL_MAP {
+            @Override
+            void configure(FakeGateway gateway) {
+                gateway.snapshots = null;
+            }
+        },
+        NULL_KEY {
+            @Override
+            void configure(FakeGateway gateway) {
+                Map<Long, EchoQuestSnapshot> malformed = new HashMap<>();
+                malformed.put(QUEST_ID, submitSnapshot(0L));
+                malformed.put(null, unrelatedSnapshot(false));
+                gateway.snapshots = malformed;
+            }
+        },
+        NULL_VALUE {
+            @Override
+            void configure(FakeGateway gateway) {
+                Map<Long, EchoQuestSnapshot> malformed = new HashMap<>();
+                malformed.put(QUEST_ID, submitSnapshot(0L));
+                malformed.put(OTHER_QUEST_ID, null);
+                gateway.snapshots = malformed;
+            }
+        },
+        RUNTIME_EXCEPTION {
+            @Override
+            void configure(FakeGateway gateway) {
+                gateway.snapshotFailure = new IllegalStateException("synchronization unavailable");
+            }
+        };
+
+        abstract void configure(FakeGateway gateway);
     }
 }
