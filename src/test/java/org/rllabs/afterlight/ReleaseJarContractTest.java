@@ -159,7 +159,11 @@ class ReleaseJarContractTest {
             "org/rllabs/afterlight/network/OpenEchoRequest.class",
             "org/rllabs/afterlight/network/OpenEchoScreen.class",
             "org/rllabs/afterlight/relay/",
+            "org/rllabs/afterlight/relay/FarRelayInitializer.class",
+            "org/rllabs/afterlight/relay/FarRelayKeys.class",
+            "org/rllabs/afterlight/relay/FarRelaySavedData.class",
             "org/rllabs/afterlight/relay/FutureConsoleBlock.class",
+            "org/rllabs/afterlight/relay/RelaySite.class",
             "org/rllabs/afterlight/relay/ReturnTerminalBlock.class",
             "org/rllabs/afterlight/route/",
             "org/rllabs/afterlight/route/EchoQuestSnapshot$RewardSnapshot.class",
@@ -192,10 +196,22 @@ class ReleaseJarContractTest {
             "assets/afterlight/textures/item/echo.png",
             "data/",
             "data/afterlight/",
+            "data/afterlight/dimension/",
+            "data/afterlight/dimension/far_relay.json",
+            "data/afterlight/dimension_type/",
+            "data/afterlight/dimension_type/far_relay.json",
+            "data/afterlight/loot_table/",
+            "data/afterlight/loot_table/chests/",
+            "data/afterlight/loot_table/chests/far_relay.json",
             "data/afterlight/recipe/",
             "data/afterlight/recipe/gate_controller.json",
             "data/afterlight/recipe/gate_frame.json",
-            "data/afterlight/recipe/signal_glass.json");
+            "data/afterlight/recipe/signal_glass.json",
+            "data/afterlight/worldgen/",
+            "data/afterlight/worldgen/biome/",
+            "data/afterlight/worldgen/biome/far_relay.json",
+            "data/afterlight/worldgen/noise_settings/",
+            "data/afterlight/worldgen/noise_settings/far_relay.json");
 
     @Test
     void builtJarHasExactInventoryOrderAndReproducibleTimestamps() throws Exception {
