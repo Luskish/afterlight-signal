@@ -29,8 +29,10 @@ Public Delivery Task 2 must ship `config/afterlight/pack_version.txt` as a Packw
 This repository deliberately has no Gradle wrapper. Install Gradle 9.2.1 and use Temurin 21.0.12. Ordinary developer builds may use dirty tracked files and regular untracked source while iterating:
 
 ```sh
-gradle clean test runGameTestServer build --no-daemon
+gradle clean test runGameTestServer build -PafterlightLockContext=macos --no-daemon
 ```
+
+The lock context is mandatory and selects the committed dependency graph for the execution platform. These examples use `macos`. On Linux, replace `macos` with `linux`. Unsupported or omitted contexts fail before dependency resolution.
 
 The build still rejects symlinked and hardlinked source inputs because Gradle must never consume an aliased source tree. This source gate requires POSIX permissions and the `unix:nlink` file attribute, so developer and release builds are supported on macOS and Linux POSIX filesystems. Native Windows filesystems are not supported by the source gate. Use Linux CI or WSL backed by a POSIX filesystem instead.
 
@@ -39,7 +41,7 @@ The build still rejects symlinked and hardlinked source inputs because Gradle mu
 Release artifacts use the exact source-bound command:
 
 ```sh
-gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks
+gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=macos --no-daemon --no-build-cache --rerun-tasks
 ```
 
 The release property must be exactly `true`. Before any release Java or resource task runs, the gate rejects dirty tracked source, release-relevant untracked source, symlinks, hardlink aliases, unsupported Git entries, source digest mismatches, private-key and token markers in any regular file, and U+2014 in any valid UTF-8 regular file. It computes a domain-separated SHA-256 over each included file's Git mode, object type, path, length, and content. The committed digest is computed independently from Git objects.

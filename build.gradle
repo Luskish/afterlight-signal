@@ -2,6 +2,7 @@ import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.nio.file.Files
 import java.util.zip.ZipFile
+import org.gradle.api.artifacts.dsl.LockMode
 
 plugins {
     id 'java'
@@ -55,14 +56,20 @@ dependencies {
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
 }
 
-dependencyLocking {
-    lockAllConfigurations()
+def lockContext = providers.gradleProperty('afterlightLockContext').orNull
+def supportedLockContexts = ['linux', 'macos'] as Set
+if (lockContext == null) {
+    throw new GradleException('Missing required Gradle property: afterlightLockContext')
+}
+if (!supportedLockContexts.contains(lockContext)) {
+    throw new GradleException(
+            "Unsupported afterlightLockContext: ${lockContext}. Expected linux or macos")
 }
 
-configurations.configureEach {
-    if (name == 'neoFormRuntimeDependenciesRuntimeClasspath') {
-        resolutionStrategy.deactivateDependencyLocking()
-    }
+dependencyLocking {
+    lockMode = LockMode.STRICT
+    lockFile = file("gradle/dependency-locks/${lockContext}.lockfile")
+    lockAllConfigurations()
 }
 
 def releasePolicy = file('tools/ReleaseSourcePolicy.java')

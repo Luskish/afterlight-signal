@@ -461,26 +461,44 @@ class ReleaseJarContractTest {
     }
 
     @Test
-    void platformSpecificNeoFormRuntimeIsExcludedFromCentralLockState() throws Exception {
+    void platformSpecificDependenciesUseStrictExecutionContextLockfiles() throws Exception {
         String build = Files.readString(ROOT.resolve("build.gradle"));
-        String exemption = """
-                configurations.configureEach {
-                    if (name == 'neoFormRuntimeDependenciesRuntimeClasspath') {
-                        resolutionStrategy.deactivateDependencyLocking()
-                    }
-                }
-                """.strip();
 
-        assertTrue(build.contains("dependencyLocking {\n    lockAllConfigurations()\n}"));
-        assertTrue(build.contains(exemption));
-        assertEquals(
-                1,
-                build.lines()
-                        .filter(line -> line.contains("resolutionStrategy.deactivateDependencyLocking()"))
-                        .count());
+        assertTrue(build.contains("import org.gradle.api.artifacts.dsl.LockMode"));
+        assertTrue(build.contains("providers.gradleProperty('afterlightLockContext').orNull"));
+        assertTrue(build.contains("['linux', 'macos'] as Set"));
+        assertTrue(build.contains("Missing required Gradle property: afterlightLockContext"));
+        assertTrue(build.contains("Unsupported afterlightLockContext:"));
+        assertTrue(build.contains("lockMode = LockMode.STRICT"));
+        assertTrue(build.contains(
+                "lockFile = file(\"gradle/dependency-locks/${lockContext}.lockfile\")"));
+        assertTrue(build.contains("lockAllConfigurations()"));
+        assertFalse(build.contains("deactivateDependencyLocking"));
+        assertFalse(Files.exists(ROOT.resolve("gradle.lockfile")));
 
-        String lockState = Files.readString(ROOT.resolve("gradle.lockfile"));
-        assertFalse(lockState.contains("neoFormRuntimeDependenciesRuntimeClasspath"));
+        String macosLock = Files.readString(
+                ROOT.resolve("gradle/dependency-locks/macos.lockfile"));
+        String linuxLock = Files.readString(
+                ROOT.resolve("gradle/dependency-locks/linux.lockfile"));
+        assertTrue(macosLock.contains(
+                "ca.weblite:java-objc-bridge:1.1=additionalRuntimeClasspath"));
+        assertTrue(macosLock.contains(
+                "io.netty:netty-transport-native-epoll:4.1.97.Final=gameTestServerLegacyClasspath"));
+        assertTrue(linuxLock.contains(
+                "ca.weblite:java-objc-bridge:1.1=compileClasspath"));
+        assertTrue(linuxLock.contains(
+                "io.netty:netty-transport-native-epoll:4.1.97.Final=additionalRuntimeClasspath"));
+    }
+
+    @Test
+    void developerAndReleaseCommandsRequireAnExplicitLockContext() throws Exception {
+        String readme = Files.readString(ROOT.resolve("README.md"));
+
+        assertTrue(readme.contains(
+                "gradle clean test runGameTestServer build -PafterlightLockContext=macos --no-daemon"));
+        assertTrue(readme.contains(
+                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=macos --no-daemon --no-build-cache --rerun-tasks"));
+        assertTrue(readme.contains("replace `macos` with `linux`"));
     }
 
     @Test
@@ -756,7 +774,7 @@ class ReleaseJarContractTest {
     void workflowRejectsDuplicateStepKey(@TempDir Path temporaryDirectory) throws Exception {
         String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
         String command =
-                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks";
+                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=linux --no-daemon --no-build-cache --rerun-tasks";
         String sourceBRun = "      - name: Build source B\n"
                 + "        working-directory: source-b\n"
                 + "        env:\n"
@@ -772,7 +790,7 @@ class ReleaseJarContractTest {
             throws Exception {
         String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
         String command =
-                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks";
+                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=linux --no-daemon --no-build-cache --rerun-tasks";
         String sourceBRun = "        run: " + command + "\n"
                 + "      - name: Compare and audit independent builds\n";
         assertWorkflowMutationRejected(
@@ -852,7 +870,7 @@ class ReleaseJarContractTest {
                 .orElseThrow();
         assertEquals(Map.of("gradle-version", "9.2.1"), gradle.with());
         String exactCommand =
-                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks";
+                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=linux --no-daemon --no-build-cache --rerun-tasks";
         List<ReleaseWorkflowModel.Step> builds = steps.stream()
                 .filter(step -> exactCommand.equals(step.run()))
                 .toList();

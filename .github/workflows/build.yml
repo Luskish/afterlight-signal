@@ -39,12 +39,12 @@ jobs:
         working-directory: source-a
         env:
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle-a
-        run: gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks
+        run: gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=linux --no-daemon --no-build-cache --rerun-tasks
       - name: Build source B
         working-directory: source-b
         env:
           GRADLE_USER_HOME: ${{ runner.temp }}/gradle-b
-        run: gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks
+        run: gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=linux --no-daemon --no-build-cache --rerun-tasks
       - name: Compare and audit independent builds
         run: |
           first=source-a/build/libs/afterlight-signal-0.1.0+1.21.1.jar
