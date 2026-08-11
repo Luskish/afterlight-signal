@@ -42,6 +42,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.TypeReference;
 
 class ReleaseJarContractTest {
     private static final byte[] DIGEST_DOMAIN =
@@ -401,6 +402,34 @@ class ReleaseJarContractTest {
     }
 
     @Test
+    void classScannerRejectsCheckcastNestedArrayClientOperand() {
+        String common = "org/rllabs/afterlight/ArrayCastFixture";
+        String client = "net/minecraft/client/renderer/LevelRenderer";
+        Map<String, byte[]> classes = Map.of(
+                common, classWithCheckcastArrayOperand(common, "[[L" + client + ";"));
+
+        AssertionError error = assertThrows(
+                AssertionError.class,
+                () -> ReleaseClassReferenceScanner.assertSafe(classes, Set.of(common)));
+
+        assertTrue(error.getMessage().matches(".*" + java.util.regex.Pattern.quote(client) + ".*"));
+    }
+
+    @Test
+    void classScannerRejectsInstructionTypeAnnotationClientDescriptor() {
+        String common = "org/rllabs/afterlight/InsnAnnotationFixture";
+        String client = "net/neoforged/neoforge/client/event/ScreenEvent";
+        Map<String, byte[]> classes = Map.of(
+                common, classWithInstructionTypeAnnotation(common, client));
+
+        AssertionError error = assertThrows(
+                AssertionError.class,
+                () -> ReleaseClassReferenceScanner.assertSafe(classes, Set.of(common)));
+
+        assertTrue(error.getMessage().matches(".*" + java.util.regex.Pattern.quote(client) + ".*"));
+    }
+
+    @Test
     void independentArchiveRebuildIsByteForByteIdentical() throws Exception {
         assertTrue(Files.isRegularFile(RELEASE_JAR), "missing built JAR: " + RELEASE_JAR);
         assertTrue(Files.isRegularFile(REBUILT_JAR), "missing rebuilt JAR: " + REBUILT_JAR);
@@ -409,8 +438,82 @@ class ReleaseJarContractTest {
 
     @Test
     void workflowPinsToolchainRunsExactCiTwiceAndAuditsOutputs() throws Exception {
-        ReleaseWorkflowModel workflow = ReleaseWorkflowModel.parse(
-                ROOT.resolve(".github/workflows/build.yml"));
+        assertWorkflowContract(ROOT.resolve(".github/workflows/build.yml"));
+        assertFalse(Files.exists(ROOT.resolve("gradlew")));
+        assertFalse(Files.exists(ROOT.resolve("gradle/wrapper/gradle-wrapper.jar")));
+    }
+
+    @Test
+    void workflowRejectsSkippedSecondBuild(@TempDir Path temporaryDirectory) throws Exception {
+        String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
+        assertWorkflowMutationRejected(
+                temporaryDirectory,
+                workflow.replace(
+                        "      - name: Build source B\n",
+                        "      - name: Build source B\n        if: false\n"));
+    }
+
+    @Test
+    void workflowRejectsToleratedAuditFailure(@TempDir Path temporaryDirectory) throws Exception {
+        String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
+        assertWorkflowMutationRejected(
+                temporaryDirectory,
+                workflow.replace(
+                        "      - name: Compare and audit independent builds\n",
+                        "      - name: Compare and audit independent builds\n"
+                                + "        continue-on-error: true\n"));
+    }
+
+    @Test
+    void workflowRejectsBuildTimeoutOverride(@TempDir Path temporaryDirectory) throws Exception {
+        String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
+        assertWorkflowMutationRejected(
+                temporaryDirectory,
+                workflow.replace(
+                        "      - name: Build source A\n",
+                        "      - name: Build source A\n        timeout-minutes: 1\n"));
+    }
+
+    @Test
+    void workflowRejectsDuplicateStepKey(@TempDir Path temporaryDirectory) throws Exception {
+        String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
+        String command =
+                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks";
+        String sourceBRun = "      - name: Build source B\n"
+                + "        working-directory: source-b\n"
+                + "        env:\n"
+                + "          GRADLE_USER_HOME: ${{ runner.temp }}/gradle-b\n"
+                + "        run: " + command + "\n";
+        assertWorkflowMutationRejected(
+                temporaryDirectory,
+                workflow.replace(sourceBRun, sourceBRun + "        run: " + command + "\n"));
+    }
+
+    @Test
+    void workflowRejectsCommandPreservedOnlyInComment(@TempDir Path temporaryDirectory)
+            throws Exception {
+        String workflow = Files.readString(ROOT.resolve(".github/workflows/build.yml"));
+        String command =
+                "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true --no-daemon --no-build-cache --rerun-tasks";
+        String sourceBRun = "        run: " + command + "\n"
+                + "      - name: Compare and audit independent builds\n";
+        assertWorkflowMutationRejected(
+                temporaryDirectory,
+                workflow.replace(
+                        sourceBRun,
+                        "        # run: " + command + "\n"
+                                + "      - name: Compare and audit independent builds\n"));
+    }
+
+    private static void assertWorkflowMutationRejected(
+            Path temporaryDirectory, String workflow) throws Exception {
+        Path mutation = temporaryDirectory.resolve("build.yml");
+        Files.writeString(mutation, workflow);
+        assertThrows(AssertionError.class, () -> assertWorkflowContract(mutation));
+    }
+
+    private static void assertWorkflowContract(Path workflowPath) throws Exception {
+        ReleaseWorkflowModel workflow = ReleaseWorkflowModel.parse(workflowPath);
         assertEquals("build", workflow.name());
         assertEquals(Set.of("name", "on", "permissions", "jobs"), workflow.topLevelKeys());
         assertEquals(Set.of("push", "pull_request"), workflow.triggers());
@@ -420,6 +523,16 @@ class ReleaseJarContractTest {
         assertEquals("ubuntu-24.04", job.runner());
         assertEquals(Set.of("runs-on", "steps"), job.keys());
         List<ReleaseWorkflowModel.Step> steps = job.steps();
+        assertEquals(
+                List.of(
+                        Set.of("name", "uses", "with"),
+                        Set.of("name", "uses", "with"),
+                        Set.of("uses", "with"),
+                        Set.of("uses", "with"),
+                        Set.of("name", "working-directory", "env", "run"),
+                        Set.of("name", "working-directory", "env", "run"),
+                        Set.of("name", "run")),
+                steps.stream().map(ReleaseWorkflowModel.Step::keys).toList());
         assertEquals(
                 List.of(
                         "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -484,8 +597,6 @@ class ReleaseJarContractTest {
         assertTrue(scalarValues.stream().noneMatch(value -> value.matches("(?s).*\\$\\{\\{\\s*secrets\\..*")));
         assertTrue(scalarValues.stream().noneMatch(value -> value.matches(
                 "(?is).*(pull_request_target|upload-artifact|gh\\s+release|create-release|publish|id-token\\s*:\\s*write).*")));
-        assertFalse(Files.exists(ROOT.resolve("gradlew")));
-        assertFalse(Files.exists(ROOT.resolve("gradle/wrapper/gradle-wrapper.jar")));
     }
 
     @Test
@@ -723,8 +834,8 @@ class ReleaseJarContractTest {
     void stageReleaseMaterializesExactImmutableHeadBytesAndModes(
             @TempDir Path temporaryDirectory) throws Exception {
         Path repository = temporaryDirectory.resolve("repository");
-        Path staging = temporaryDirectory.resolve("staging");
         initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
         Path binary = repository.resolve("src/main/resources/payload.bin");
         Files.write(binary, new byte[] {0, 1, 2, (byte) 0xff});
         Path script = repository.resolve("tools/release-check.sh");
@@ -735,7 +846,7 @@ class ReleaseJarContractTest {
         git(repository, "add", binary.toString(), script.toString());
         git(repository, "commit", "-m", "staging fixtures");
 
-        CommandResult result = policy("stage-release", repository, staging);
+        CommandResult result = stagePolicy(repository, staging, stageIdentity(repository));
 
         assertEquals(0, result.exitCode(), result.output());
         assertArrayEquals(
@@ -760,11 +871,11 @@ class ReleaseJarContractTest {
     void postStageWorkingMutationCannotAlterStagedCompilerInput(
             @TempDir Path temporaryDirectory) throws Exception {
         Path repository = temporaryDirectory.resolve("repository");
-        Path staging = temporaryDirectory.resolve("staging");
         initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
         Path workingSource = repository.resolve("src/main/java/example/Main.java");
         byte[] committed = Files.readAllBytes(workingSource);
-        assertEquals(0, policy("stage-release", repository, staging).exitCode());
+        assertEquals(0, stagePolicy(repository, staging, stageIdentity(repository)).exitCode());
         Path stagedSource = staging.resolve("src/main/java/example/Main.java");
 
         Files.writeString(workingSource, "package example; class Mutated {}\n");
@@ -780,8 +891,8 @@ class ReleaseJarContractTest {
     void stageReleaseRejectsUnsupportedGitlink(@TempDir Path temporaryDirectory)
             throws Exception {
         Path repository = temporaryDirectory.resolve("repository");
-        Path staging = temporaryDirectory.resolve("staging");
         initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
         String commit = successful(gitResult(repository, "rev-parse", "HEAD"));
         git(
                 repository,
@@ -791,7 +902,9 @@ class ReleaseJarContractTest {
                 "160000," + commit + ",vendor/module");
         git(repository, "commit", "-m", "gitlink fixture");
 
-        CommandResult result = policy("stage-release", repository, staging);
+        StageIdentity unsupportedIdentity = new StageIdentity(
+                successful(gitResult(repository, "rev-parse", "HEAD")), "0".repeat(64));
+        CommandResult result = stagePolicy(repository, staging, unsupportedIdentity);
 
         assertRejected(result, "unsupported_git_entry mode=160000 type=commit path=vendor/module");
         assertFalse(Files.exists(staging));
@@ -801,19 +914,260 @@ class ReleaseJarContractTest {
     void stageReleaseRejectsUnsupportedSymlinkMode(@TempDir Path temporaryDirectory)
             throws Exception {
         Path repository = temporaryDirectory.resolve("repository");
-        Path staging = temporaryDirectory.resolve("staging");
         initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
         Path link = repository.resolve("src/main/resources/linked.bin");
         Files.createSymbolicLink(link, Path.of("mod.json"));
         git(repository, "add", link.toString());
         git(repository, "commit", "-m", "symlink mode fixture");
 
-        CommandResult result = policy("stage-release", repository, staging);
+        StageIdentity unsupportedIdentity = new StageIdentity(
+                successful(gitResult(repository, "rev-parse", "HEAD")), "0".repeat(64));
+        CommandResult result = stagePolicy(repository, staging, unsupportedIdentity);
 
         assertRejected(
                 result,
                 "unsupported_git_entry mode=120000 type=blob path=src/main/resources/linked.bin");
         assertFalse(Files.exists(staging));
+    }
+
+    @Test
+    void stageReleaseWritesAuthenticatedManifestForExactExpectedIdentity(
+            @TempDir Path temporaryDirectory) throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
+        StageIdentity identity = stageIdentity(repository);
+
+        CommandResult result = stagePolicy(repository, staging, identity);
+
+        assertEquals(0, result.exitCode(), result.output());
+        assertEquals(
+                "AFTERLIGHT_RELEASE_STAGE_V1\n"
+                        + "sourceCommit=" + identity.commit() + "\n"
+                        + "sourceTreeSha256=" + identity.digest() + "\n",
+                Files.readString(staging.resolve(".afterlight-release-stage-manifest")));
+        assertEquals(
+                0,
+                verifyStagedPolicy(repository, staging, identity).exitCode());
+    }
+
+    @Test
+    void stageReleaseRejectsCleanHeadSwapBeforeStaging(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
+        StageIdentity expected = stageIdentity(repository);
+        Files.writeString(repository.resolve("src/main/resources/mod.json"), "{\"changed\":true}\n");
+        git(repository, "add", "src/main/resources/mod.json");
+        git(repository, "commit", "-m", "clean head swap");
+        String actual = successful(gitResult(repository, "rev-parse", "HEAD"));
+
+        CommandResult result = stagePolicy(repository, staging, expected);
+
+        assertRejected(
+                result,
+                "expected_head_mismatch phase=before_stage expected="
+                        + expected.commit()
+                        + " actual="
+                        + actual);
+        assertFalse(Files.exists(staging.resolve(".afterlight-release-stage-manifest")));
+    }
+
+    @Test
+    void postBuildStageVerificationRejectsHeadChangedAfterStaging(
+            @TempDir Path temporaryDirectory) throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
+        StageIdentity expected = stageIdentity(repository);
+        byte[] committed = Files.readAllBytes(repository.resolve("src/main/resources/mod.json"));
+        assertEquals(0, stagePolicy(repository, staging, expected).exitCode());
+        Files.writeString(repository.resolve("src/main/resources/mod.json"), "{\"changed\":true}\n");
+        git(repository, "add", "src/main/resources/mod.json");
+        git(repository, "commit", "-m", "head changed after staging");
+        String actual = successful(gitResult(repository, "rev-parse", "HEAD"));
+
+        CommandResult result = verifyStagedPolicy(repository, staging, expected);
+
+        assertArrayEquals(committed, Files.readAllBytes(staging.resolve("src/main/resources/mod.json")));
+        assertRejected(
+                result,
+                "expected_head_mismatch phase=post_build expected="
+                        + expected.commit()
+                        + " actual="
+                        + actual);
+    }
+
+    @Test
+    void releaseBuildRejectsCleanHeadSwapImmediatelyBeforeStage(
+            @TempDir Path temporaryDirectory) throws Exception {
+        BuildProbe probe = initializeBuildProbe(temporaryDirectory.resolve("before-stage"));
+        Path initScript = temporaryDirectory.resolve("swap-before-stage.gradle");
+        Files.writeString(
+                initScript,
+                """
+                gradle.projectsEvaluated {
+                    rootProject {
+                        def swap = tasks.register('reviewSwapHeadBeforeStage', Exec) {
+                            commandLine 'git', 'checkout', '--detach', '--quiet', '%s'
+                        }
+                        tasks.named('stageReleaseSource') {
+                            dependsOn swap
+                        }
+                    }
+                }
+                """.formatted(probe.changedCommit()));
+
+        CommandResult result = nestedReleaseProbe(probe.repository(), initScript);
+
+        assertRejected(result, "expected_head_mismatch phase=before_stage");
+        assertFalse(Files.exists(probe.repository().resolve(
+                "build/libs/afterlight-signal-0.1.0+1.21.1.jar")));
+    }
+
+    @Test
+    void releaseBuildRejectsHeadSwapAfterStageWithoutChangingCompilerInputs(
+            @TempDir Path temporaryDirectory) throws Exception {
+        BuildProbe probe = initializeBuildProbe(temporaryDirectory.resolve("after-stage"));
+        Path initScript = temporaryDirectory.resolve("swap-after-stage.gradle");
+        Files.writeString(
+                initScript,
+                """
+                gradle.projectsEvaluated {
+                    rootProject {
+                        def stage = tasks.named('stageReleaseSource')
+                        def swap = tasks.register('reviewSwapHeadAfterStage', Exec) {
+                            dependsOn stage
+                            commandLine 'git', 'checkout', '--detach', '--quiet', '%s'
+                        }
+                        tasks.named('compileJava') {
+                            dependsOn swap
+                        }
+                        tasks.named('processResources') {
+                            dependsOn swap
+                        }
+                    }
+                }
+                """.formatted(probe.changedCommit()));
+
+        CommandResult result = nestedReleaseProbe(probe.repository(), initScript);
+
+        assertArrayEquals(
+                probe.originalPackBytes(),
+                Files.readAllBytes(probe.repository().resolve(
+                        ".gradle/release-source/src/main/resources/pack.mcmeta")));
+        assertRejected(result, "expected_head_mismatch phase=post_build");
+    }
+
+    @Test
+    void postBuildStageVerificationRejectsChangedStagedBytes(
+            @TempDir Path temporaryDirectory) throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
+        StageIdentity expected = stageIdentity(repository);
+        assertEquals(0, stagePolicy(repository, staging, expected).exitCode());
+        Path staged = staging.resolve("src/main/resources/mod.json");
+        Files.setPosixFilePermissions(
+                staged,
+                Set.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+        Files.writeString(staged, "{\"tampered\":true}\n");
+        Files.setPosixFilePermissions(staged, Set.of(PosixFilePermission.OWNER_READ));
+
+        CommandResult result = verifyStagedPolicy(repository, staging, expected);
+
+        assertRejected(result, "staged_content_mismatch path=src/main/resources/mod.json");
+    }
+
+    @Test
+    void stageReleaseRejectsExternalGradleSymlink(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path external = temporaryDirectory.resolve("external-gradle");
+        initializeRepository(repository);
+        Files.createDirectories(external);
+        Files.createSymbolicLink(repository.resolve(".gradle"), external);
+        StageIdentity expected = stageIdentity(repository);
+
+        CommandResult result = stagePolicy(
+                repository, repository.resolve(".gradle/release-source"), expected);
+
+        assertRejected(result, "unsafe_stage_ancestor path=.gradle kind=symbolic_link");
+        assertFalse(Files.exists(external.resolve("release-source")));
+    }
+
+    @Test
+    void stageReleaseRejectsExistingExternalReleaseSource(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path external = temporaryDirectory.resolve("external-release-source");
+        initializeRepository(repository);
+        Files.createDirectories(repository.resolve(".gradle"));
+        Files.createDirectories(external);
+        Path sentinel = external.resolve("sentinel.txt");
+        Files.writeString(sentinel, "preserve\n");
+        Files.createSymbolicLink(repository.resolve(".gradle/release-source"), external);
+        StageIdentity expected = stageIdentity(repository);
+
+        CommandResult result = stagePolicy(
+                repository, repository.resolve(".gradle/release-source"), expected);
+
+        assertRejected(
+                result,
+                "unsafe_stage_ancestor path=.gradle/release-source kind=symbolic_link");
+        assertEquals("preserve\n", Files.readString(sentinel));
+    }
+
+    @Test
+    void stageCleanupNeverDeletesReplacedExternalDestination(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path external = temporaryDirectory.resolve("external-release-source");
+        initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
+        StageIdentity expected = stageIdentity(repository);
+        assertEquals(0, stagePolicy(repository, staging, expected).exitCode());
+        Files.setPosixFilePermissions(
+                staging,
+                Set.of(
+                        PosixFilePermission.OWNER_READ,
+                        PosixFilePermission.OWNER_WRITE,
+                        PosixFilePermission.OWNER_EXECUTE));
+        Files.move(staging, temporaryDirectory.resolve("original-release-source"));
+        Files.createDirectories(external);
+        Path sentinel = external.resolve("sentinel.txt");
+        Files.writeString(sentinel, "preserve\n");
+        Files.createSymbolicLink(staging, external);
+
+        CommandResult result = stagePolicy(repository, staging, expected);
+
+        assertRejected(
+                result,
+                "unsafe_stage_ancestor path=.gradle/release-source kind=symbolic_link");
+        assertEquals("preserve\n", Files.readString(sentinel));
+    }
+
+    @Test
+    void stageReleaseRejectsReplacedGradleAncestor(@TempDir Path temporaryDirectory)
+            throws Exception {
+        Path repository = temporaryDirectory.resolve("repository");
+        Path external = temporaryDirectory.resolve("external-gradle");
+        initializeRepository(repository);
+        Path staging = repository.resolve(".gradle/release-source");
+        StageIdentity expected = stageIdentity(repository);
+        assertEquals(0, stagePolicy(repository, staging, expected).exitCode());
+        Files.move(repository.resolve(".gradle"), temporaryDirectory.resolve("original-gradle"));
+        Files.createDirectories(external);
+        Path sentinel = external.resolve("sentinel.txt");
+        Files.writeString(sentinel, "preserve\n");
+        Files.createSymbolicLink(repository.resolve(".gradle"), external);
+
+        CommandResult result = stagePolicy(repository, staging, expected);
+
+        assertRejected(result, "unsafe_stage_ancestor path=.gradle kind=symbolic_link");
+        assertEquals("preserve\n", Files.readString(sentinel));
     }
 
     @Test
@@ -873,6 +1227,31 @@ class ReleaseJarContractTest {
         }
     }
 
+    @Test
+    void releaseProvenanceMatchesAuthenticatedStageManifest() throws Exception {
+        assumeTrue(Boolean.getBoolean("afterlight.release.build"));
+        Path manifest = Path.of(System.getProperty("afterlight.release.stage.manifest"));
+        List<String> lines = Files.readAllLines(manifest);
+        assertEquals(
+                List.of(
+                        "AFTERLIGHT_RELEASE_STAGE_V1",
+                        "sourceCommit=" + System.getProperty("afterlight.source.commit"),
+                        "sourceTreeSha256="
+                                + System.getProperty("afterlight.source.tree.sha256")),
+                lines);
+        try (var zip = new ZipFile(RELEASE_JAR.toFile())) {
+            JsonObject provenance = JsonParser.parseString(
+                            readUtf8(zip, "META-INF/afterlight-provenance.json"))
+                    .getAsJsonObject();
+            assertEquals(
+                    lines.get(1).substring("sourceCommit=".length()),
+                    provenance.get("sourceCommit").getAsString());
+            assertEquals(
+                    lines.get(2).substring("sourceTreeSha256=".length()),
+                    provenance.get("sourceTreeSha256").getAsString());
+        }
+    }
+
     private static void initializeRepository(Path repository) throws Exception {
         Files.createDirectories(repository.resolve("src/main/java/example"));
         Files.createDirectories(repository.resolve("src/main/resources"));
@@ -909,15 +1288,100 @@ class ReleaseJarContractTest {
                 repository.toString());
     }
 
-    private static CommandResult policy(String command, Path repository, Path staging)
-            throws Exception {
+    private static StageIdentity stageIdentity(Path repository) throws Exception {
+        return new StageIdentity(
+                successful(gitResult(repository, "rev-parse", "HEAD")),
+                successful(policy("digest-head", repository)));
+    }
+
+    private static CommandResult stagePolicy(
+            Path repository, Path staging, StageIdentity identity) throws Exception {
         return execute(
                 repository,
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 repository.resolve("tools/ReleaseSourcePolicy.java").toString(),
-                command,
+                "stage-release",
                 repository.toString(),
-                staging.toString());
+                staging.toString(),
+                identity.commit(),
+                identity.digest());
+    }
+
+    private static CommandResult verifyStagedPolicy(
+            Path repository, Path staging, StageIdentity identity) throws Exception {
+        return execute(
+                repository,
+                Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                repository.resolve("tools/ReleaseSourcePolicy.java").toString(),
+                "verify-staged-release",
+                repository.toString(),
+                staging.toString(),
+                identity.commit(),
+                identity.digest());
+    }
+
+    private static BuildProbe initializeBuildProbe(Path repository) throws Exception {
+        Files.createDirectories(repository);
+        for (String path : nulSeparated(successfulBytes(gitBytes(ROOT, "ls-files", "-z")))) {
+            Path source = ROOT.resolve(path);
+            Path target = repository.resolve(path);
+            Files.createDirectories(target.getParent());
+            Files.write(target, Files.readAllBytes(source));
+            if (Files.isExecutable(source)) {
+                Set<PosixFilePermission> permissions = Files.getPosixFilePermissions(target);
+                permissions.add(PosixFilePermission.OWNER_EXECUTE);
+                Files.setPosixFilePermissions(target, permissions);
+            }
+        }
+        git(repository, "init");
+        git(repository, "config", "user.name", "Afterlight Review Probe");
+        git(repository, "config", "user.email", "afterlight-review@example.invalid");
+        git(repository, "add", ".");
+        git(repository, "commit", "-m", "probe source");
+        String originalCommit = successful(gitResult(repository, "rev-parse", "HEAD"));
+        Path pack = repository.resolve("src/main/resources/pack.mcmeta");
+        byte[] originalPackBytes = Files.readAllBytes(pack);
+        Files.writeString(
+                pack,
+                "{\n  \"pack\": {\n    \"description\": \"changed head probe\",\n"
+                        + "    \"pack_format\": 48\n  }\n}\n");
+        git(repository, "add", "src/main/resources/pack.mcmeta");
+        git(repository, "commit", "-m", "changed probe head");
+        String changedCommit = successful(gitResult(repository, "rev-parse", "HEAD"));
+        git(repository, "checkout", "--detach", "--quiet", originalCommit);
+        return new BuildProbe(repository, originalCommit, changedCommit, originalPackBytes);
+    }
+
+    private static CommandResult nestedReleaseProbe(Path repository, Path initScript)
+            throws Exception {
+        return execute(
+                repository,
+                "gradle",
+                "--init-script",
+                initScript.toString(),
+                "clean",
+                "verifyReleaseJar",
+                "-x",
+                "test",
+                "-PafterlightRelease=true",
+                "--offline",
+                "--no-daemon",
+                "--no-build-cache",
+                "--rerun-tasks");
+    }
+
+    private static List<String> nulSeparated(byte[] content) {
+        List<String> values = new ArrayList<>();
+        int start = 0;
+        for (int index = 0; index < content.length; index++) {
+            if (content[index] == 0) {
+                values.add(new String(
+                        Arrays.copyOfRange(content, start, index), StandardCharsets.UTF_8));
+                start = index + 1;
+            }
+        }
+        assertEquals(content.length, start, "unterminated NUL-separated output");
+        return List.copyOf(values);
     }
 
     private static void git(Path repository, String... arguments) throws Exception {
@@ -1174,6 +1638,66 @@ class ReleaseJarContractTest {
         return writer.toByteArray();
     }
 
+    private static byte[] classWithCheckcastArrayOperand(
+            String internalName, String arrayDescriptor) {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(
+                Opcodes.V21,
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL,
+                internalName,
+                null,
+                "java/lang/Object",
+                null);
+        MethodVisitor method = writer.visitMethod(
+                Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC,
+                "dormant",
+                "()V",
+                null,
+                null);
+        method.visitCode();
+        method.visitInsn(Opcodes.ACONST_NULL);
+        method.visitTypeInsn(Opcodes.CHECKCAST, arrayDescriptor);
+        method.visitInsn(Opcodes.POP);
+        method.visitInsn(Opcodes.RETURN);
+        method.visitMaxs(1, 0);
+        method.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
+    private static byte[] classWithInstructionTypeAnnotation(
+            String internalName, String annotationInternalName) {
+        ClassWriter writer = new ClassWriter(0);
+        writer.visit(
+                Opcodes.V21,
+                Opcodes.ACC_PUBLIC | Opcodes.ACC_FINAL,
+                internalName,
+                null,
+                "java/lang/Object",
+                null);
+        MethodVisitor method = writer.visitMethod(
+                Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC,
+                "dormant",
+                "()V",
+                null,
+                null);
+        method.visitCode();
+        method.visitInsn(Opcodes.ACONST_NULL);
+        method.visitTypeInsn(Opcodes.CHECKCAST, "java/lang/Object");
+        method.visitInsnAnnotation(
+                        TypeReference.newTypeArgumentReference(TypeReference.CAST, 0).getValue(),
+                        null,
+                        "L" + annotationInternalName + ";",
+                        true)
+                .visitEnd();
+        method.visitInsn(Opcodes.POP);
+        method.visitInsn(Opcodes.RETURN);
+        method.visitMaxs(1, 0);
+        method.visitEnd();
+        writer.visitEnd();
+        return writer.toByteArray();
+    }
+
     private static String expectedComparisonAndAuditCommand() {
         return """
                 first=source-a/build/libs/afterlight-signal-0.1.0+1.21.1.jar
@@ -1284,4 +1808,12 @@ class ReleaseJarContractTest {
 
     private record TokenPattern(
             String name, byte[] prefix, int minimumLength, boolean underscore, boolean hyphen) {}
+
+    private record StageIdentity(String commit, String digest) {}
+
+    private record BuildProbe(
+            Path repository,
+            String originalCommit,
+            String changedCommit,
+            byte[] originalPackBytes) {}
 }

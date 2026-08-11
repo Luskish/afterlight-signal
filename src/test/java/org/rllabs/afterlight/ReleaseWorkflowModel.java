@@ -63,6 +63,9 @@ record ReleaseWorkflowModel(
                 fail("unexpected jobs indentation at line " + (index + 1));
             }
             String jobName = key(lines.get(index));
+            if (jobs.containsKey(jobName)) {
+                fail("duplicate workflow key: " + jobName);
+            }
             int jobEnd = nextAtMostIndent(lines, index + 1, 2);
             Map<String, String> fields = scalarMap(lines, 4, index + 1, jobEnd);
             int stepsStart = sectionStart(lines, 4, "steps", index + 1, jobEnd);
@@ -94,7 +97,9 @@ record ReleaseWorkflowModel(
             Map<String, String> scalars = new LinkedHashMap<>();
             Map<String, String> with = new LinkedHashMap<>();
             Map<String, String> environment = new LinkedHashMap<>();
+            Set<String> stepKeys = new LinkedHashSet<>();
             parseStepField(line.stripLeading().substring(2), scalars);
+            stepKeys.addAll(scalars.keySet());
             int fieldIndex = index + 1;
             while (fieldIndex < stepEnd) {
                 if (blankOrComment(lines.get(fieldIndex))) {
@@ -107,6 +112,9 @@ record ReleaseWorkflowModel(
                 }
                 String fieldKey = key(fieldLine);
                 String fieldValue = value(fieldLine);
+                if (!stepKeys.add(fieldKey)) {
+                    fail("duplicate workflow key: " + fieldKey);
+                }
                 if (fieldValue.equals("|")) {
                     int blockEnd = fieldIndex + 1;
                     while (blockEnd < stepEnd
@@ -119,7 +127,7 @@ record ReleaseWorkflowModel(
                         String blockLine = lines.get(blockIndex);
                         block.add(blockLine.length() >= 10 ? blockLine.substring(10) : "");
                     }
-                    scalars.put(fieldKey, String.join("\n", block).stripTrailing());
+                    putUnique(scalars, fieldKey, String.join("\n", block).stripTrailing());
                     fieldIndex = blockEnd;
                     continue;
                 }
@@ -134,7 +142,7 @@ record ReleaseWorkflowModel(
                     fieldIndex = mapEnd;
                     continue;
                 }
-                scalars.put(fieldKey, fieldValue);
+                putUnique(scalars, fieldKey, fieldValue);
                 fieldIndex++;
             }
             steps.add(new Step(
@@ -144,7 +152,7 @@ record ReleaseWorkflowModel(
                     scalars.get("working-directory"),
                     Map.copyOf(with),
                     Map.copyOf(environment),
-                    Set.copyOf(scalars.keySet())));
+                    Set.copyOf(stepKeys)));
             index = stepEnd;
         }
         return steps;
@@ -155,7 +163,10 @@ record ReleaseWorkflowModel(
         if (separator < 0) {
             fail("step field lacks colon: " + field);
         }
-        scalars.put(field.substring(0, separator).strip(), cleanScalar(field.substring(separator + 1)));
+        putUnique(
+                scalars,
+                field.substring(0, separator).strip(),
+                cleanScalar(field.substring(separator + 1)));
     }
 
     private static int nextStep(List<String> lines, int start, int end) {
@@ -175,10 +186,7 @@ record ReleaseWorkflowModel(
             if (blankOrComment(line) || indent(line) != expectedIndent) {
                 continue;
             }
-            String value = value(line);
-            if (!value.isEmpty()) {
-                values.put(key(line), value);
-            }
+            putUnique(values, key(line), value(line));
         }
         return values;
     }
@@ -189,7 +197,10 @@ record ReleaseWorkflowModel(
         for (int index = start; index < end; index++) {
             String line = lines.get(index);
             if (!blankOrComment(line) && indent(line) == expectedIndent) {
-                keys.add(key(line));
+                String key = key(line);
+                if (!keys.add(key)) {
+                    fail("duplicate workflow key: " + key);
+                }
             }
         }
         return keys;
@@ -258,6 +269,12 @@ record ReleaseWorkflowModel(
             value = value.substring(1, value.length() - 1);
         }
         return value;
+    }
+
+    private static void putUnique(Map<String, String> values, String key, String value) {
+        if (values.putIfAbsent(key, value) != null) {
+            fail("duplicate workflow key: " + key);
+        }
     }
 
     private static int indent(String line) {

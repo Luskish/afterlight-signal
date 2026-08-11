@@ -81,16 +81,43 @@ def releaseBuild = providers.gradleProperty('afterlightRelease').map { value ->
     true
 }.orElse(false)
 def releaseStagingDirectory = layout.projectDirectory.dir('.gradle/release-source')
+def releaseStageManifest = releaseStagingDirectory.file('.afterlight-release-stage-manifest')
+def configuredSourceCommit = sourceCommit.get()
+def configuredCommittedSourceTreeSha256 = committedSourceTreeSha256.get()
 def provenanceSourceTreeSha256 = releaseBuild.get()
-        ? committedSourceTreeSha256
+        ? configuredCommittedSourceTreeSha256
         : sourceTreeSha256
+def readReleaseStageManifest = {
+    def manifest = releaseStageManifest.asFile
+    if (!manifest.isFile()) {
+        throw new GradleException("Missing authenticated release stage manifest: ${manifest}")
+    }
+    def lines = manifest.readLines('UTF-8')
+    if (lines.size() != 3
+            || lines[0] != 'AFTERLIGHT_RELEASE_STAGE_V1'
+            || !lines[1].startsWith('sourceCommit=')
+            || !lines[2].startsWith('sourceTreeSha256=')) {
+        throw new GradleException('Invalid authenticated release stage manifest')
+    }
+    def identity = [
+            sourceCommit: lines[1].substring('sourceCommit='.length()),
+            sourceTreeSha256: lines[2].substring('sourceTreeSha256='.length())
+    ]
+    if (!(identity.sourceCommit ==~ /[0-9a-f]{40,64}/)
+            || !(identity.sourceTreeSha256 ==~ /[0-9a-f]{64}/)) {
+        throw new GradleException('Invalid authenticated release stage identity')
+    }
+    return identity.asImmutable()
+}
 
 def stageReleaseSource = tasks.register('stageReleaseSource', Exec) {
     commandLine policyJava.absolutePath,
             releasePolicy.absolutePath,
             'stage-release',
             layout.projectDirectory.asFile.absolutePath,
-            releaseStagingDirectory.asFile.absolutePath
+            releaseStagingDirectory.asFile.absolutePath,
+            configuredSourceCommit,
+            configuredCommittedSourceTreeSha256
     mustRunAfter tasks.named('clean')
 }
 
@@ -140,19 +167,28 @@ def provenanceFile = layout.buildDirectory.file(
         'resources/main/META-INF/afterlight-provenance.json')
 
 tasks.named('processResources') {
-    inputs.property 'afterlightSourceCommit', sourceCommit
+    inputs.property 'afterlightSourceCommit', configuredSourceCommit
     inputs.property 'afterlightSourceTreeSha256', provenanceSourceTreeSha256
     inputs.property 'afterlightReleaseBuild', releaseBuild
+    if (releaseBuild.get()) {
+        inputs.file releaseStageManifest
+    }
     outputs.file provenanceFile
     doLast {
+        def identity = releaseBuild.get()
+                ? readReleaseStageManifest()
+                : [
+                        sourceCommit: configuredSourceCommit,
+                        sourceTreeSha256: provenanceSourceTreeSha256.get()
+                ]
         def output = provenanceFile.get().asFile
         output.parentFile.mkdirs()
         output.text = JsonOutput.prettyPrint(JsonOutput.toJson([
                 schema: 3,
                 sourceTreeDigestSchema: 2,
                 sourceRepository: 'https://github.com/Luskish/afterlight-signal',
-                sourceCommit: sourceCommit.get(),
-                sourceTreeSha256: provenanceSourceTreeSha256.get(),
+                sourceCommit: identity.sourceCommit,
+                sourceTreeSha256: identity.sourceTreeSha256,
                 releaseBuild: releaseBuild.get(),
                 version: project.version.toString()
         ])) + '\n'
@@ -217,15 +253,20 @@ afterEvaluate {
         dependsOn tasks.named('jar')
         dependsOn rebuiltReleaseJar
         systemProperty 'afterlight.source.root', layout.projectDirectory.asFile.absolutePath
-        systemProperty 'afterlight.source.commit', sourceCommit.get()
-        systemProperty 'afterlight.source.tree.sha256', provenanceSourceTreeSha256.get()
-        systemProperty 'afterlight.committed.source.tree.sha256', committedSourceTreeSha256.get()
+        systemProperty 'afterlight.source.commit', configuredSourceCommit
+        systemProperty 'afterlight.source.tree.sha256', releaseBuild.get()
+                ? configuredCommittedSourceTreeSha256
+                : provenanceSourceTreeSha256.get()
+        systemProperty 'afterlight.committed.source.tree.sha256',
+                configuredCommittedSourceTreeSha256
         systemProperty 'afterlight.release.build', releaseBuild.get()
         systemProperty 'afterlight.release.jar', releaseJar.get().asFile.absolutePath
         systemProperty 'afterlight.rebuilt.release.jar',
                 rebuiltReleaseJar.get().archiveFile.get().asFile.absolutePath
         systemProperty 'afterlight.release.staging.root',
                 releaseStagingDirectory.asFile.absolutePath
+        systemProperty 'afterlight.release.stage.manifest',
+                releaseStageManifest.asFile.absolutePath
         systemProperty 'afterlight.release.main.java.roots',
                 sourceSets.main.java.srcDirs*.absolutePath.join(File.pathSeparator)
         systemProperty 'afterlight.release.main.resources.roots',
@@ -249,8 +290,11 @@ def verifyReleaseSourceAfterBuild = tasks.register('verifyReleaseSourceAfterBuil
     dependsOn tasks.named('jar')
     commandLine policyJava.absolutePath,
             releasePolicy.absolutePath,
-            'verify-release',
-            layout.projectDirectory.asFile.absolutePath
+            'verify-staged-release',
+            layout.projectDirectory.asFile.absolutePath,
+            releaseStagingDirectory.asFile.absolutePath,
+            configuredSourceCommit,
+            configuredCommittedSourceTreeSha256
     mustRunAfter tasks.named('jar')
 }
 
@@ -272,12 +316,27 @@ tasks.register('verifyReleaseJar') {
     dependsOn verifyTrackedJars
     inputs.file releaseJar
     inputs.file rebuiltReleaseJar.flatMap { it.archiveFile }
+    inputs.file releaseStageManifest
     doLast {
         if (!releaseBuild.get()) {
             throw new GradleException('verifyReleaseJar requires -PafterlightRelease=true')
         }
         def primary = releaseJar.get().asFile
         def rebuilt = rebuiltReleaseJar.get().archiveFile.get().asFile
+        def stageIdentity = readReleaseStageManifest()
+        if (stageIdentity.sourceCommit != configuredSourceCommit
+                || stageIdentity.sourceTreeSha256 != configuredCommittedSourceTreeSha256) {
+            throw new GradleException('Authenticated release stage identity changed')
+        }
+        providers.exec {
+            commandLine policyJava.absolutePath,
+                    releasePolicy.absolutePath,
+                    'verify-staged-release',
+                    layout.projectDirectory.asFile.absolutePath,
+                    releaseStagingDirectory.asFile.absolutePath,
+                    configuredSourceCommit,
+                    configuredCommittedSourceTreeSha256
+        }.standardOutput.asText.get()
         if (Files.mismatch(primary.toPath(), rebuilt.toPath()) != -1L) {
             throw new GradleException('Independent release JAR reconstruction changed bytes')
         }
@@ -298,8 +357,8 @@ tasks.register('verifyReleaseJar') {
                     || provenance.schema != 3
                     || provenance.sourceTreeDigestSchema != 2
                     || provenance.sourceRepository != 'https://github.com/Luskish/afterlight-signal'
-                    || provenance.sourceCommit != sourceCommit.get()
-                    || provenance.sourceTreeSha256 != committedSourceTreeSha256.get()
+                    || provenance.sourceCommit != stageIdentity.sourceCommit
+                    || provenance.sourceTreeSha256 != stageIdentity.sourceTreeSha256
                     || provenance.releaseBuild != true
                     || provenance.version != project.version.toString()) {
                 throw new GradleException('Release JAR provenance changed from committed source')

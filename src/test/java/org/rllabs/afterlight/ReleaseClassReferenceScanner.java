@@ -233,7 +233,14 @@ final class ReleaseClassReferenceScanner {
 
                 @Override
                 public void visitTypeInsn(int opcode, String type) {
-                    addInternalName(type);
+                    addClassConstant(type);
+                }
+
+                @Override
+                public AnnotationVisitor visitInsnAnnotation(
+                        int typeRef, TypePath typePath, String descriptor, boolean visible) {
+                    addDescriptor(descriptor);
+                    return annotationVisitor();
                 }
 
                 @Override
@@ -354,7 +361,7 @@ final class ReleaseClassReferenceScanner {
             }
             for (int index = 0; index < count; index++) {
                 if (values[index] instanceof String internalName) {
-                    addInternalName(internalName);
+                    addClassConstant(internalName);
                 }
             }
         }
@@ -420,9 +427,18 @@ final class ReleaseClassReferenceScanner {
         }
 
         private void addInternalName(String name) {
-            if (name != null) {
+            if (name == null) {
+                return;
+            }
+            if (name.startsWith("[")) {
+                addType(Type.getType(name));
+            } else {
                 references.add(name);
             }
+        }
+
+        private void addClassConstant(String name) {
+            addInternalName(name);
         }
     }
 }

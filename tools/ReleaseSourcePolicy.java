@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.PosixFilePermission;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -35,11 +36,16 @@ public final class ReleaseSourcePolicy {
     private static final String BLOB_TYPE = "blob";
     private static final String TREE_MODE = "040000";
     private static final String TREE_TYPE = "tree";
+    private static final String STAGE_MANIFEST_NAME = ".afterlight-release-stage-manifest";
+    private static final String STAGE_MANIFEST_HEADER = "AFTERLIGHT_RELEASE_STAGE_V1";
     private static final LinkOption[] NOFOLLOW = {LinkOption.NOFOLLOW_LINKS};
     private static final Set<PosixFilePermission> PRIVATE_DIRECTORY_PERMISSIONS = Set.of(
             PosixFilePermission.OWNER_READ,
             PosixFilePermission.OWNER_WRITE,
             PosixFilePermission.OWNER_EXECUTE);
+    private static final Set<PosixFilePermission> PRIVATE_FILE_PERMISSIONS = Set.of(
+            PosixFilePermission.OWNER_READ,
+            PosixFilePermission.OWNER_WRITE);
     private static final Set<PosixFilePermission> IMMUTABLE_DIRECTORY_PERMISSIONS = Set.of(
             PosixFilePermission.OWNER_READ,
             PosixFilePermission.OWNER_EXECUTE);
@@ -91,20 +97,23 @@ public final class ReleaseSourcePolicy {
     private ReleaseSourcePolicy() {}
 
     public static void main(String[] arguments) {
-        if ((arguments.length == 3 && arguments[0].equals("stage-release"))
+        if ((arguments.length == 5
+                        && (arguments[0].equals("stage-release")
+                                || arguments[0].equals("verify-staged-release")))
                 || arguments.length == 2) {
             run(arguments);
             return;
         }
         System.err.println(
                 "usage: java tools/ReleaseSourcePolicy.java <verify-clean|verify-working-types|verify-release|digest-working|digest-head> <repository>\n"
-                        + "   or: java tools/ReleaseSourcePolicy.java stage-release <repository> <destination>");
+                        + "   or: java tools/ReleaseSourcePolicy.java <stage-release|verify-staged-release> <repository> <destination> <expected-commit> <expected-digest>");
         System.exit(2);
     }
 
     private static void run(String[] arguments) {
-        Path repository = Path.of(arguments[1]).toAbsolutePath().normalize();
         try {
+            Path requestedRepository = Path.of(arguments[1]).toAbsolutePath().normalize();
+            Path repository = resolveRepository(requestedRepository);
             switch (arguments[0]) {
                 case "verify-clean" -> verifyClean(repository);
                 case "verify-working-types" -> workingEntries(repository);
@@ -112,7 +121,17 @@ public final class ReleaseSourcePolicy {
                 case "digest-working" -> System.out.println(digest(workingEntries(repository)));
                 case "digest-head" -> System.out.println(digest(headEntries(repository)));
                 case "stage-release" -> stageRelease(
-                        repository, Path.of(arguments[2]).toAbsolutePath().normalize());
+                        stageAnchor(
+                                requestedRepository,
+                                repository,
+                                Path.of(arguments[2]).toAbsolutePath().normalize()),
+                        expectedIdentity(arguments[3], arguments[4]));
+                case "verify-staged-release" -> verifyStagedRelease(
+                        stageAnchor(
+                                requestedRepository,
+                                repository,
+                                Path.of(arguments[2]).toAbsolutePath().normalize()),
+                        expectedIdentity(arguments[3], arguments[4]));
                 default -> throw new PolicyException("unknown command: " + arguments[0]);
             }
         } catch (IOException | InterruptedException | NoSuchAlgorithmException | PolicyException exception) {
@@ -129,19 +148,60 @@ public final class ReleaseSourcePolicy {
         }
     }
 
-    private static void stageRelease(Path repository, Path destination)
+    private static void stageRelease(StageAnchor anchor, StageIdentity expected)
             throws IOException, InterruptedException, NoSuchAlgorithmException, PolicyException {
-        validateStageDestination(repository, destination);
-        Map<String, SourceEntry> head = headEntries(repository);
+        validateStageAncestors(anchor, true, false);
+        verifyExpectedHead(anchor.repository(), expected.commit(), "before_stage");
+        Map<String, SourceEntry> head = headEntries(anchor.repository());
         auditContent(head);
-        verifyClean(repository);
-        Map<String, SourceEntry> working = workingEntries(repository);
+        String committedDigest = digest(head);
+        if (!committedDigest.equals(expected.digest())) {
+            throw new PolicyException(
+                    "expected_digest_mismatch phase=before_stage expected="
+                            + expected.digest()
+                            + " actual="
+                            + committedDigest);
+        }
+        verifyClean(anchor.repository());
+        Map<String, SourceEntry> working = workingEntries(anchor.repository());
         auditContent(working);
-        VerifiedSources verified = new VerifiedSources(head, digest(head), digest(working));
+        VerifiedSources verified = new VerifiedSources(head, committedDigest, digest(working));
         if (!verified.committedDigest().equals(verified.workingDigest())) {
             throw digestMismatch(verified);
         }
-        materialize(destination, verified.headEntries());
+        materialize(anchor, verified.headEntries(), expected);
+        verifyExpectedHead(anchor.repository(), expected.commit(), "after_stage");
+        verifyStagedSnapshot(anchor, verified.headEntries(), expected);
+    }
+
+    private static void verifyStagedRelease(StageAnchor anchor, StageIdentity expected)
+            throws IOException, InterruptedException, NoSuchAlgorithmException, PolicyException {
+        validateStageAncestors(anchor, false, true);
+        StageIdentity manifest = readStageManifest(anchor.destination());
+        verifyManifestIdentity(manifest, expected);
+        verifyExpectedHead(anchor.repository(), expected.commit(), "post_build");
+        Map<String, SourceEntry> head = headEntries(anchor.repository());
+        auditContent(head);
+        String committedDigest = digest(head);
+        if (!committedDigest.equals(expected.digest())) {
+            throw new PolicyException(
+                    "expected_digest_mismatch phase=post_build expected="
+                            + expected.digest()
+                            + " actual="
+                            + committedDigest);
+        }
+        verifyClean(anchor.repository());
+        Map<String, SourceEntry> working = workingEntries(anchor.repository());
+        auditContent(working);
+        String workingDigest = digest(working);
+        if (!workingDigest.equals(expected.digest())) {
+            throw new PolicyException(
+                    "working_digest_mismatch phase=post_build expected="
+                            + expected.digest()
+                            + " actual="
+                            + workingDigest);
+        }
+        verifyStagedSnapshot(anchor, head, expected);
     }
 
     private static VerifiedSources verifySources(Path repository)
@@ -420,36 +480,139 @@ public final class ReleaseSourcePolicy {
         return -1;
     }
 
-    private static void validateStageDestination(Path repository, Path destination)
-            throws PolicyException {
-        if (destination.equals(repository) || repository.startsWith(destination)) {
-            throw new PolicyException("unsafe_stage_destination path=" + destination);
+    private static Path resolveRepository(Path requested) throws IOException, PolicyException {
+        Path repository;
+        try {
+            repository = requested.toRealPath();
+        } catch (NoSuchFileException exception) {
+            throw new PolicyException("missing_repository path=" + requested);
         }
-        if (destination.startsWith(repository)) {
-            String relative = repository.relativize(destination).toString().replace('\\', '/');
-            if (isReleaseRelevant(relative)) {
-                throw new PolicyException("release_relevant_stage_destination path=" + relative);
+        BasicFileAttributes attributes =
+                Files.readAttributes(repository, BasicFileAttributes.class, NOFOLLOW);
+        if (!attributes.isDirectory() || attributes.isSymbolicLink()) {
+            throw new PolicyException(
+                    "invalid_repository path=" + repository + " kind=" + kind(attributes));
+        }
+        return repository;
+    }
+
+    private static StageAnchor stageAnchor(
+            Path requestedRepository, Path repository, Path requestedDestination)
+            throws PolicyException {
+        Path relative;
+        if (requestedDestination.startsWith(requestedRepository)) {
+            relative = requestedRepository.relativize(requestedDestination).normalize();
+        } else if (requestedDestination.startsWith(repository)) {
+            relative = repository.relativize(requestedDestination).normalize();
+        } else {
+            throw new PolicyException("unsafe_stage_destination path=" + requestedDestination);
+        }
+        if (relative.getNameCount() == 0 || relative.startsWith("..")) {
+            throw new PolicyException("unsafe_stage_destination path=" + requestedDestination);
+        }
+        String normalized = relative.toString().replace('\\', '/');
+        if (isReleaseRelevant(normalized)) {
+            throw new PolicyException("release_relevant_stage_destination path=" + normalized);
+        }
+        Path destination = repository.resolve(relative).normalize();
+        if (!destination.startsWith(repository) || destination.equals(repository)) {
+            throw new PolicyException("unsafe_stage_destination path=" + requestedDestination);
+        }
+        return new StageAnchor(repository, destination, relative);
+    }
+
+    private static StageIdentity expectedIdentity(String commit, String digest)
+            throws PolicyException {
+        if (!commit.matches("[0-9a-f]{40,64}")) {
+            throw new PolicyException("invalid_expected_commit value=" + commit);
+        }
+        if (!digest.matches("[0-9a-f]{64}")) {
+            throw new PolicyException("invalid_expected_digest value=" + digest);
+        }
+        return new StageIdentity(commit, digest);
+    }
+
+    private static void verifyExpectedHead(Path repository, String expected, String phase)
+            throws IOException, InterruptedException, PolicyException {
+        String actual = headCommit(repository);
+        if (!actual.equals(expected)) {
+            throw new PolicyException(
+                    "expected_head_mismatch phase="
+                            + phase
+                            + " expected="
+                            + expected
+                            + " actual="
+                            + actual);
+        }
+    }
+
+    private static String headCommit(Path repository)
+            throws IOException, InterruptedException, PolicyException {
+        String commit = new String(
+                        runGit(repository, "rev-parse", "--verify", "HEAD^{commit}"),
+                        StandardCharsets.UTF_8)
+                .strip();
+        if (!commit.matches("[0-9a-f]{40,64}")) {
+            throw new PolicyException("invalid_head_commit value=" + commit);
+        }
+        return commit;
+    }
+
+    private static void validateStageAncestors(
+            StageAnchor anchor, boolean createMissingParents, boolean includeDestination)
+            throws IOException, PolicyException {
+        Path current = anchor.repository();
+        int count = anchor.relative().getNameCount();
+        int limit = includeDestination ? count : count - 1;
+        for (int index = 0; index < limit; index++) {
+            current = current.resolve(anchor.relative().getName(index));
+            String display = stageDisplay(anchor, current);
+            if (Files.notExists(current, NOFOLLOW)) {
+                if (!createMissingParents) {
+                    throw new PolicyException("missing_stage_ancestor path=" + display);
+                }
+                createPrivateDirectory(current);
+            }
+            BasicFileAttributes attributes =
+                    Files.readAttributes(current, BasicFileAttributes.class, NOFOLLOW);
+            if (!attributes.isDirectory() || attributes.isSymbolicLink()) {
+                throw new PolicyException(
+                        "unsafe_stage_ancestor path="
+                                + display
+                                + " kind="
+                                + kind(attributes));
+            }
+            Path real = current.toRealPath();
+            if (!real.equals(current) || !real.startsWith(anchor.repository())) {
+                throw new PolicyException(
+                        "unsafe_stage_ancestor path=" + display + " kind=path_escape");
             }
         }
     }
 
-    private static void materialize(Path destination, Map<String, SourceEntry> entries)
+    private static String stageDisplay(StageAnchor anchor, Path path) {
+        return anchor.repository().relativize(path).toString().replace('\\', '/');
+    }
+
+    private static void materialize(
+            StageAnchor anchor, Map<String, SourceEntry> entries, StageIdentity identity)
             throws IOException, PolicyException {
-        deleteExistingStage(destination);
-        createPrivateDirectory(destination);
+        validateStageAncestors(anchor, true, false);
+        if (Files.exists(anchor.destination(), NOFOLLOW)) {
+            validateStageAncestors(anchor, false, true);
+            deleteExistingStage(anchor);
+        }
+        validateStageAncestors(anchor, false, false);
+        createPrivateDirectory(anchor.destination());
         try {
             for (Map.Entry<String, SourceEntry> mapEntry : entries.entrySet()) {
                 Path relative = validatedRelativePath(mapEntry.getKey(), "stage");
-                Path output = destination.resolve(relative).normalize();
-                if (!output.startsWith(destination)) {
+                Path output = anchor.destination().resolve(relative).normalize();
+                if (!output.startsWith(anchor.destination())) {
                     throw new PolicyException("invalid_stage_path path=" + mapEntry.getKey());
                 }
-                createPrivateParents(destination, output.getParent());
-                Files.write(
-                        output,
-                        mapEntry.getValue().content(),
-                        StandardOpenOption.CREATE_NEW,
-                        StandardOpenOption.WRITE);
+                createPrivateParents(anchor, output.getParent());
+                writePrivateFile(output, mapEntry.getValue().content());
                 verifyStagedFile(output, mapEntry.getKey(), mapEntry.getValue());
                 Files.setPosixFilePermissions(
                         output,
@@ -457,7 +620,10 @@ public final class ReleaseSourcePolicy {
                                 ? IMMUTABLE_EXECUTABLE_PERMISSIONS
                                 : IMMUTABLE_REGULAR_PERMISSIONS);
             }
-            try (var paths = Files.walk(destination)) {
+            Path manifest = anchor.destination().resolve(STAGE_MANIFEST_NAME);
+            writePrivateFile(manifest, stageManifest(identity).getBytes(StandardCharsets.UTF_8));
+            Files.setPosixFilePermissions(manifest, IMMUTABLE_REGULAR_PERMISSIONS);
+            try (var paths = Files.walk(anchor.destination())) {
                 for (Path directory : paths.filter(Files::isDirectory)
                         .sorted(Comparator.reverseOrder())
                         .toList()) {
@@ -466,11 +632,145 @@ public final class ReleaseSourcePolicy {
             }
         } catch (IOException | PolicyException exception) {
             try {
-                deleteExistingStage(destination);
-            } catch (IOException ignored) {
+                deleteExistingStage(anchor);
+            } catch (IOException | PolicyException ignored) {
                 exception.addSuppressed(ignored);
             }
             throw exception;
+        }
+    }
+
+    private static void verifyStagedSnapshot(
+            StageAnchor anchor, Map<String, SourceEntry> expectedEntries, StageIdentity expected)
+            throws IOException, NoSuchAlgorithmException, PolicyException {
+        validateStageAncestors(anchor, false, true);
+        StageIdentity manifest = readStageManifest(anchor.destination());
+        verifyManifestIdentity(manifest, expected);
+        TreeMap<String, SourceEntry> stagedEntries = new TreeMap<>();
+        TreeSet<String> expectedFiles = new TreeSet<>(expectedEntries.keySet());
+        expectedFiles.add(STAGE_MANIFEST_NAME);
+        TreeSet<String> expectedDirectories = new TreeSet<>();
+        expectedDirectories.add("");
+        for (String path : expectedEntries.keySet()) {
+            Path parent = Path.of(path).getParent();
+            while (parent != null) {
+                expectedDirectories.add(parent.toString().replace('\\', '/'));
+                parent = parent.getParent();
+            }
+        }
+        for (Map.Entry<String, SourceEntry> mapEntry : expectedEntries.entrySet()) {
+            Path output = anchor.destination().resolve(validatedRelativePath(
+                    mapEntry.getKey(), "staged_verification"));
+            byte[] content = verifyImmutableStagedFile(
+                    output, mapEntry.getKey(), mapEntry.getValue().mode());
+            if (!Arrays.equals(mapEntry.getValue().content(), content)) {
+                throw new PolicyException("staged_content_mismatch path=" + mapEntry.getKey());
+            }
+            stagedEntries.put(
+                    mapEntry.getKey(),
+                    new SourceEntry(mapEntry.getValue().mode(), BLOB_TYPE, content));
+        }
+        try (var paths = Files.walk(anchor.destination())) {
+            for (Path path : paths.toList()) {
+                BasicFileAttributes attributes =
+                        Files.readAttributes(path, BasicFileAttributes.class, NOFOLLOW);
+                String relative = anchor.destination().equals(path)
+                        ? ""
+                        : anchor.destination().relativize(path).toString().replace('\\', '/');
+                if (attributes.isSymbolicLink()) {
+                    throw new PolicyException("unexpected_staged_path path=" + relative);
+                }
+                if (attributes.isDirectory()) {
+                    if (!expectedDirectories.contains(relative)) {
+                        throw new PolicyException("unexpected_staged_path path=" + relative);
+                    }
+                } else if (!attributes.isRegularFile() || !expectedFiles.contains(relative)) {
+                    throw new PolicyException("unexpected_staged_path path=" + relative);
+                }
+            }
+        }
+        String actualDigest = digest(stagedEntries);
+        if (!actualDigest.equals(expected.digest())) {
+            throw new PolicyException(
+                    "staged_digest_mismatch expected="
+                            + expected.digest()
+                            + " actual="
+                            + actualDigest);
+        }
+    }
+
+    private static byte[] verifyImmutableStagedFile(Path output, String path, String mode)
+            throws IOException, PolicyException {
+        BasicFileAttributes attributes =
+                Files.readAttributes(output, BasicFileAttributes.class, NOFOLLOW);
+        if (!attributes.isRegularFile() || attributes.isSymbolicLink()) {
+            throw new PolicyException("non_regular_staged_input path=" + path);
+        }
+        Object rawLinkCount = Files.getAttribute(output, "unix:nlink", NOFOLLOW);
+        if (!(rawLinkCount instanceof Number number) || number.longValue() != 1) {
+            throw new PolicyException("staged_hardlink_count path=" + path);
+        }
+        byte[] content = Files.readAllBytes(output);
+        Set<PosixFilePermission> expectedPermissions = EXECUTABLE_MODE.equals(mode)
+                ? IMMUTABLE_EXECUTABLE_PERMISSIONS
+                : IMMUTABLE_REGULAR_PERMISSIONS;
+        Set<PosixFilePermission> actualPermissions =
+                Files.getPosixFilePermissions(output, NOFOLLOW);
+        if (!actualPermissions.equals(expectedPermissions)) {
+            throw new PolicyException(
+                    "staged_permissions_mismatch path="
+                            + path
+                            + " expected="
+                            + expectedPermissions
+                            + " actual="
+                            + actualPermissions);
+        }
+        return content;
+    }
+
+    private static String stageManifest(StageIdentity identity) {
+        return STAGE_MANIFEST_HEADER
+                + "\nsourceCommit="
+                + identity.commit()
+                + "\nsourceTreeSha256="
+                + identity.digest()
+                + "\n";
+    }
+
+    private static StageIdentity readStageManifest(Path destination)
+            throws IOException, PolicyException {
+        Path manifest = destination.resolve(STAGE_MANIFEST_NAME);
+        byte[] content = verifyImmutableStagedFile(manifest, STAGE_MANIFEST_NAME, REGULAR_MODE);
+        String text = new String(content, StandardCharsets.UTF_8);
+        List<String> lines = text.lines().toList();
+        if (lines.size() != 3 || !lines.get(0).equals(STAGE_MANIFEST_HEADER)) {
+            throw new PolicyException("invalid_stage_manifest");
+        }
+        String commitPrefix = "sourceCommit=";
+        String digestPrefix = "sourceTreeSha256=";
+        if (!lines.get(1).startsWith(commitPrefix) || !lines.get(2).startsWith(digestPrefix)) {
+            throw new PolicyException("invalid_stage_manifest");
+        }
+        return expectedIdentity(
+                lines.get(1).substring(commitPrefix.length()),
+                lines.get(2).substring(digestPrefix.length()));
+    }
+
+    private static void verifyManifestIdentity(StageIdentity manifest, StageIdentity expected)
+            throws PolicyException {
+        if (!manifest.commit().equals(expected.commit())) {
+            throw new PolicyException(
+                    "stage_manifest_commit_mismatch expected="
+                            + expected.commit()
+                            + " actual="
+                            + manifest.commit());
+        }
+        if (!manifest.digest().equals(expected.digest())) {
+            throw new PolicyException(
+                    "stage_manifest_digest_mismatch expected="
+                            + expected.digest()
+                            + " actual="
+                            + manifest.digest());
         }
     }
 
@@ -491,13 +791,15 @@ public final class ReleaseSourcePolicy {
         }
     }
 
-    private static void createPrivateParents(Path root, Path parent) throws IOException {
+    private static void createPrivateParents(StageAnchor anchor, Path parent)
+            throws IOException, PolicyException {
         if (parent == null) {
             return;
         }
-        Path relative = root.relativize(parent);
-        Path current = root;
+        Path relative = anchor.destination().relativize(parent);
+        Path current = anchor.destination();
         for (Path component : relative) {
+            validateStageAncestors(anchor, false, true);
             current = current.resolve(component);
             if (Files.notExists(current, NOFOLLOW)) {
                 createPrivateDirectory(current);
@@ -505,30 +807,55 @@ public final class ReleaseSourcePolicy {
                 BasicFileAttributes attributes =
                         Files.readAttributes(current, BasicFileAttributes.class, NOFOLLOW);
                 if (!attributes.isDirectory() || attributes.isSymbolicLink()) {
-                    throw new IOException("staging parent was replaced: " + current);
+                    throw new PolicyException(
+                            "unsafe_staged_parent path="
+                                    + anchor.destination().relativize(current)
+                                    + " kind="
+                                    + kind(attributes));
                 }
             }
         }
     }
 
     private static void createPrivateDirectory(Path directory) throws IOException {
-        Files.createDirectory(directory);
+        Files.createDirectory(
+                directory,
+                PosixFilePermissions.asFileAttribute(PRIVATE_DIRECTORY_PERMISSIONS));
         Files.setPosixFilePermissions(directory, PRIVATE_DIRECTORY_PERMISSIONS);
     }
 
-    private static void deleteExistingStage(Path destination) throws IOException {
-        if (Files.notExists(destination, NOFOLLOW)) {
-            Path parent = destination.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
+    private static void writePrivateFile(Path output, byte[] content) throws IOException {
+        try (var channel = Files.newByteChannel(
+                output,
+                Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+                PosixFilePermissions.asFileAttribute(PRIVATE_FILE_PERMISSIONS))) {
+            ByteBuffer buffer = ByteBuffer.wrap(content);
+            while (buffer.hasRemaining()) {
+                channel.write(buffer);
             }
+        }
+        Files.setPosixFilePermissions(output, PRIVATE_FILE_PERMISSIONS);
+    }
+
+    private static void deleteExistingStage(StageAnchor anchor)
+            throws IOException, PolicyException {
+        validateStageAncestors(anchor, false, true);
+        Path destination = anchor.destination();
+        if (!destination.toRealPath().equals(destination)
+                || !destination.startsWith(anchor.repository())) {
+            throw new PolicyException("unsafe_stage_cleanup path=" + destination);
+        }
+        if (Files.notExists(destination, NOFOLLOW)) {
             return;
         }
         BasicFileAttributes root =
                 Files.readAttributes(destination, BasicFileAttributes.class, NOFOLLOW);
         if (!root.isDirectory() || root.isSymbolicLink()) {
-            Files.delete(destination);
-            return;
+            throw new PolicyException(
+                    "unsafe_stage_ancestor path="
+                            + stageDisplay(anchor, destination)
+                            + " kind="
+                            + kind(root));
         }
         Files.walkFileTree(
                 destination,
@@ -746,6 +1073,10 @@ public final class ReleaseSourcePolicy {
             Map<String, SourceEntry> headEntries,
             String committedDigest,
             String workingDigest) {}
+
+    private record StageAnchor(Path repository, Path destination, Path relative) {}
+
+    private record StageIdentity(String commit, String digest) {}
 
     private record WorkingMetadata(String mode, long size, long linkCount, Object fileKey) {
         private boolean sameFile(WorkingMetadata other) {
