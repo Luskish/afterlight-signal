@@ -269,6 +269,9 @@ public record EchoScreenLayout(
 
         public boolean overlaps(Rect other) {
             Objects.requireNonNull(other);
+            if (width == 0 || height == 0 || other.width == 0 || other.height == 0) {
+                return false;
+            }
             return x < other.right()
                     && right() > other.x
                     && y < other.bottom()

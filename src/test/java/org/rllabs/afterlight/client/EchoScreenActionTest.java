@@ -26,6 +26,7 @@ class EchoScreenActionTest {
     private static final long QUEST_ID = 0x11L;
     private static final long OTHER_QUEST_ID = 0x12L;
     private static final long TASK_ID = 0x21L;
+    private static final long OTHER_TASK_ID = 0x22L;
     private static final long REWARD_ID = 0x31L;
     private static final long OTHER_REWARD_ID = 0x32L;
 
@@ -176,6 +177,113 @@ class EchoScreenActionTest {
         assertEquals(List.of(REWARD_ID, OTHER_REWARD_ID), gateway.claims);
     }
 
+    @Test
+    void submitDoesNotReplacePendingPinForSameQuest() {
+        FakeGateway gateway = new FakeGateway(Map.of(QUEST_ID, submitSnapshot(0L)));
+        EchoScreen screen = new EchoScreen(route(), gateway);
+
+        screen.activate(Action.PIN);
+        screen.activate(Action.SUBMIT);
+
+        assertFalse(screen.isActionEnabled(Action.PIN));
+        screen.activate(Action.PIN);
+        assertEquals(List.of(QUEST_ID), gateway.pins);
+        assertEquals(List.of(TASK_ID), gateway.submissions);
+    }
+
+    @Test
+    void pinDoesNotReplacePendingSubmitForSameQuest() {
+        FakeGateway gateway = new FakeGateway(Map.of(QUEST_ID, submitSnapshot(0L)));
+        EchoScreen screen = new EchoScreen(route(), gateway);
+
+        screen.activate(Action.SUBMIT);
+        screen.activate(Action.PIN);
+
+        assertFalse(screen.isActionEnabled(Action.SUBMIT));
+        screen.activate(Action.SUBMIT);
+        assertEquals(List.of(TASK_ID), gateway.submissions);
+        assertEquals(List.of(QUEST_ID), gateway.pins);
+    }
+
+    @Test
+    void pinningAnotherSelectedQuestDoesNotReplaceFirstQuestCooldown() {
+        FakeGateway gateway = new FakeGateway(twoQuestSnapshots(submitSnapshot(0L), false));
+        EchoScreen screen = new EchoScreen(twoQuestRoute(), gateway);
+
+        screen.activate(Action.PIN);
+        gateway.snapshots = Map.of(
+                QUEST_ID, completeSnapshot(),
+                OTHER_QUEST_ID, otherSubmitSnapshot());
+        screen.tick();
+        screen.activate(Action.PIN);
+        gateway.snapshots = Map.of(
+                QUEST_ID, submitSnapshot(0L),
+                OTHER_QUEST_ID, otherSubmitSnapshot());
+        screen.tick();
+
+        assertFalse(screen.isActionEnabled(Action.PIN));
+        screen.activate(Action.PIN);
+        assertEquals(List.of(QUEST_ID, OTHER_QUEST_ID), gateway.pins);
+    }
+
+    @Test
+    void transientUnavailableRecoveryPreservesUnchangedPinCooldown() throws Exception {
+        FakeGateway gateway = new FakeGateway(Map.of(QUEST_ID, submitSnapshot(0L)));
+        EchoScreen screen = new EchoScreen(route(), gateway);
+        screen.activate(Action.PIN);
+        gateway.snapshots = Map.of();
+
+        screen.tick();
+        assertUnavailable(screen);
+        gateway.snapshots = Map.of(QUEST_ID, submitSnapshot(0L));
+        screen.tick();
+
+        assertFalse(screen.isActionEnabled(Action.PIN));
+        screen.activate(Action.PIN);
+        assertEquals(List.of(QUEST_ID), gateway.pins);
+    }
+
+    @Test
+    void unavailableCooldownExpiresOnItsTenthTick() throws Exception {
+        FakeGateway gateway = new FakeGateway(Map.of(QUEST_ID, submitSnapshot(0L)));
+        EchoScreen screen = new EchoScreen(route(), gateway);
+        screen.activate(Action.PIN);
+        gateway.snapshots = Map.of();
+
+        for (int tick = 0; tick < 9; tick++) {
+            screen.tick();
+        }
+
+        assertEquals(1, pendingMutationCount(screen));
+        screen.tick();
+        assertEquals(0, pendingMutationCount(screen));
+
+        gateway.snapshots = Map.of(QUEST_ID, submitSnapshot(0L));
+        screen.tick();
+        assertTrue(screen.isActionEnabled(Action.PIN));
+    }
+
+    @Test
+    void trustedPinChangeAfterOutageClearsOnlyMatchingPendingMutation() throws Exception {
+        FakeGateway gateway = new FakeGateway(Map.of(QUEST_ID, submitSnapshot(0L, false)));
+        EchoScreen screen = new EchoScreen(route(), gateway);
+        screen.activate(Action.PIN);
+        screen.activate(Action.SUBMIT);
+        gateway.snapshots = Map.of();
+        screen.tick();
+        assertUnavailable(screen);
+        gateway.snapshots = Map.of(QUEST_ID, submitSnapshot(0L, true));
+
+        screen.tick();
+
+        assertTrue(screen.isActionEnabled(Action.PIN));
+        assertFalse(screen.isActionEnabled(Action.SUBMIT));
+        screen.activate(Action.PIN);
+        screen.activate(Action.SUBMIT);
+        assertEquals(List.of(QUEST_ID, QUEST_ID), gateway.pins);
+        assertEquals(List.of(TASK_ID), gateway.submissions);
+    }
+
     @ParameterizedTest
     @EnumSource(InvalidSnapshots.class)
     void malformedInitialSnapshotsDegradeToUnavailableWithoutMutation(InvalidSnapshots invalid) throws Exception {
@@ -280,6 +388,40 @@ class EchoScreenActionTest {
                 List.of());
     }
 
+    private static EchoQuestSnapshot completeSnapshot() {
+        return new EchoQuestSnapshot(
+                QUEST_ID,
+                "Signal Trace",
+                "Recover the missing carrier",
+                true,
+                false,
+                false,
+                List.of(),
+                List.of(),
+                List.of());
+    }
+
+    private static EchoQuestSnapshot otherSubmitSnapshot() {
+        return new EchoQuestSnapshot(
+                OTHER_QUEST_ID,
+                "Secondary Trace",
+                "Continue through the carrier",
+                false,
+                true,
+                false,
+                List.of(),
+                List.of(new TaskSnapshot(
+                        OTHER_TASK_ID,
+                        "Check the secondary relay",
+                        0L,
+                        2L,
+                        false,
+                        true,
+                        true,
+                        true)),
+                List.of());
+    }
+
     private static void activateEveryAction(EchoScreen screen) {
         for (Action action : Action.values()) {
             screen.activate(action);
@@ -295,6 +437,21 @@ class EchoScreenActionTest {
         for (Action action : Action.values()) {
             assertFalse(screen.isActionEnabled(action));
         }
+    }
+
+    private static int pendingMutationCount(EchoScreen screen) throws Exception {
+        for (String fieldName : List.of("pendingMutations", "pendingMutation")) {
+            try {
+                Field pendingField = EchoScreen.class.getDeclaredField(fieldName);
+                pendingField.setAccessible(true);
+                Object pending = pendingField.get(screen);
+                return pending instanceof Map<?, ?> pendingMap
+                        ? pendingMap.size()
+                        : pending == null ? 0 : 1;
+            } catch (NoSuchFieldException ignored) {
+            }
+        }
+        throw new NoSuchFieldException("EchoScreen pending mutation state");
     }
 
     private static final class FakeGateway implements EchoQuestGateway {

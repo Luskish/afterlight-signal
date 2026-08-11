@@ -1,6 +1,7 @@
 package org.rllabs.afterlight.client;
 
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -38,10 +39,11 @@ public class EchoScreen extends Screen {
     private final EchoQuestGateway gateway;
     private final EchoRouteResolver resolver;
     private final EnumMap<Action, Button> actionButtons = new EnumMap<>(Action.class);
+    private final Map<MutationKey, PendingMutation> pendingMutations = new HashMap<>();
     private EchoScreenModel model;
     private Map<Long, EchoQuestSnapshot> snapshots;
+    private boolean snapshotsTrusted;
     private EchoScreenLayout layout;
-    private PendingMutation pendingMutation;
 
     public EchoScreen(EchoRoute route, EchoQuestGateway gateway) {
         this(Objects.requireNonNull(route), gateway, false);
@@ -81,7 +83,7 @@ public class EchoScreen extends Screen {
     public void tick() {
         if (route != null) {
             model = refreshModel();
-            advancePendingMutation();
+            advancePendingMutations();
         }
         updateButtons();
     }
@@ -154,11 +156,11 @@ public class EchoScreen extends Screen {
             case ARCHIVE -> gateway.openArchive(exactTargetId);
         }
         if (action != Action.ARCHIVE) {
-            pendingMutation = new PendingMutation(
-                    action,
-                    exactTargetId,
-                    fingerprint,
-                    MUTATION_COOLDOWN_TICKS);
+            pendingMutations.put(
+                    new MutationKey(action, exactTargetId),
+                    new PendingMutation(
+                            fingerprint,
+                            MUTATION_COOLDOWN_TICKS));
         }
         updateButtons();
     }
@@ -170,41 +172,38 @@ public class EchoScreen extends Screen {
 
     private EchoScreenModel refreshModel() {
         try {
-            snapshots = normalizeSnapshots(gateway.snapshots(route));
+            Map<Long, EchoQuestSnapshot> normalized = normalizeSnapshots(gateway.snapshots(route));
+            snapshotsTrusted = isCompleteTrustedSnapshot(normalized);
+            snapshots = snapshotsTrusted ? normalized : Map.of();
         } catch (RuntimeException exception) {
             snapshots = Map.of();
+            snapshotsTrusted = false;
         }
         EchoRecommendation recommendation = resolver.resolve(route, snapshots);
         return EchoScreenModel.from(route, snapshots, recommendation);
     }
 
-    private void advancePendingMutation() {
-        if (pendingMutation == null) {
+    private void advancePendingMutations() {
+        if (pendingMutations.isEmpty()) {
             return;
         }
-        MutationFingerprint synchronizedFingerprint = fingerprint(
-                pendingMutation.action(),
-                pendingMutation.targetId());
-        if (model.kind() == EchoRecommendation.Kind.SIGNAL_UNAVAILABLE
-                || !synchronizedFingerprint.exists()
-                || !pendingMutation.fingerprint().equals(synchronizedFingerprint)
-                || pendingMutation.ticksRemaining() <= 1) {
-            pendingMutation = null;
+        pendingMutations.replaceAll((key, pending) -> pending.age());
+        pendingMutations.entrySet().removeIf(entry -> entry.getValue().ticksRemaining() <= 0);
+        if (!snapshotsTrusted) {
             return;
         }
-        pendingMutation = new PendingMutation(
-                pendingMutation.action(),
-                pendingMutation.targetId(),
-                pendingMutation.fingerprint(),
-                pendingMutation.ticksRemaining() - 1);
+        pendingMutations.entrySet().removeIf(entry -> {
+            MutationKey key = entry.getKey();
+            MutationFingerprint synchronizedFingerprint = fingerprint(key.action(), key.targetId());
+            return !synchronizedFingerprint.exists()
+                    || !entry.getValue().fingerprint().equals(synchronizedFingerprint);
+        });
     }
 
     private boolean isPendingForCurrentTarget(Action action) {
-        if (pendingMutation == null || pendingMutation.action() != action) {
-            return false;
-        }
         OptionalLong currentTarget = targetId(action);
-        return currentTarget.isPresent() && currentTarget.getAsLong() == pendingMutation.targetId();
+        return currentTarget.isPresent()
+                && pendingMutations.containsKey(new MutationKey(action, currentTarget.getAsLong()));
     }
 
     private OptionalLong targetId(Action action) {
@@ -274,6 +273,16 @@ public class EchoScreen extends Screen {
             }
         }
         return Map.copyOf(rawSnapshots);
+    }
+
+    private boolean isCompleteTrustedSnapshot(Map<Long, EchoQuestSnapshot> candidateSnapshots) {
+        for (long questId : route.questIds()) {
+            EchoQuestSnapshot snapshot = candidateSnapshots.get(questId);
+            if (snapshot == null || snapshot.questId() != questId) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void addActionButton(Action action, Component label, int index) {
@@ -414,14 +423,19 @@ public class EchoScreen extends Screen {
         return 0xFF000000 | color;
     }
 
-    private record PendingMutation(
-            Action action,
-            long targetId,
-            MutationFingerprint fingerprint,
-            int ticksRemaining) {
-        private PendingMutation {
+    private record MutationKey(Action action, long targetId) {
+        private MutationKey {
             Objects.requireNonNull(action);
+        }
+    }
+
+    private record PendingMutation(MutationFingerprint fingerprint, int ticksRemaining) {
+        private PendingMutation {
             Objects.requireNonNull(fingerprint);
+        }
+
+        private PendingMutation age() {
+            return new PendingMutation(fingerprint, ticksRemaining - 1);
         }
     }
 

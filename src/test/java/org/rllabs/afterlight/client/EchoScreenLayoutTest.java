@@ -125,6 +125,19 @@ class EchoScreenLayoutTest {
         }
     }
 
+    @Test
+    void zeroAreaRectanglesNeverOverlapInEitherOperandOrder() {
+        Rect positive = new Rect(0, 0, 10, 10);
+        Rect zeroPoint = new Rect(5, 5, 0, 0);
+        Rect zeroWidth = new Rect(5, 0, 0, 10);
+        Rect zeroHeight = new Rect(0, 5, 10, 0);
+
+        assertFalse(zeroPoint.overlaps(positive));
+        assertFalse(positive.overlaps(zeroPoint));
+        assertFalse(zeroWidth.overlaps(zeroHeight));
+        assertFalse(zeroHeight.overlaps(zeroWidth));
+    }
+
     private static Stream<Arguments> requiredResolutionMatrix() {
         return Stream.of(854, 1280, 1920).flatMap(width -> {
             int height = switch (width) {
