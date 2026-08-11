@@ -23,6 +23,9 @@ public final class EchoRecoveryService {
         if (!inventory.hasFreeSlot()) {
             return failed(RecoveryStatus.NO_SPACE, currentBond);
         }
+        if (currentBond.generation() == Integer.MAX_VALUE) {
+            return failed(RecoveryStatus.GENERATION_EXHAUSTED, currentBond);
+        }
         return insert(
                 playerId,
                 currentBond,
@@ -59,7 +62,8 @@ public final class EchoRecoveryService {
     public enum RecoveryStatus {
         ISSUED,
         NO_SPACE,
-        INSERT_FAILED
+        INSERT_FAILED,
+        GENERATION_EXHAUSTED
     }
 
     public record RecoveryResult(

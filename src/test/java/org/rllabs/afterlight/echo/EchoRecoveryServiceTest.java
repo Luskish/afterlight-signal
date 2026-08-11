@@ -1,10 +1,15 @@
 package org.rllabs.afterlight.echo;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.google.gson.JsonParser;
 import com.mojang.serialization.JsonOps;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -26,6 +31,7 @@ class EchoRecoveryServiceTest {
         assertEquals(Optional.of(expectedIdentity), result.identity());
         assertEquals(expectedIdentity, inventory.insertedIdentity());
         assertEquals(1, inventory.insertCalls());
+        assertEquals(List.of("hasFreeSlot", "insert"), inventory.calls());
         assertTrue(service.isValid(playerId, result.bond(), expectedIdentity));
     }
 
@@ -43,6 +49,7 @@ class EchoRecoveryServiceTest {
         assertEquals(Optional.of(expectedIdentity), result.identity());
         assertEquals(expectedIdentity, inventory.insertedIdentity());
         assertEquals(1, inventory.insertCalls());
+        assertEquals(List.of("hasFreeSlot", "insert"), inventory.calls());
     }
 
     @Test
@@ -125,9 +132,55 @@ class EchoRecoveryServiceTest {
         assertEquals(original, decoded);
     }
 
+    @Test
+    void generationExhaustionLeavesBondUnchanged() {
+        var playerId = UUID.fromString("2e5ca257-ae34-4828-80e6-4518a75c82f9");
+        var originalBond = new EchoBond(true, Integer.MAX_VALUE, 10L);
+        var inventory = new RecordingInventory(true, true);
+
+        var result = service.recover(playerId, originalBond, 20L, inventory);
+
+        assertEquals(RecoveryStatus.GENERATION_EXHAUSTED, result.status());
+        assertSame(originalBond, result.bond());
+        assertTrue(result.identity().isEmpty());
+        assertEquals(0, inventory.insertCalls());
+        assertEquals(List.of("hasFreeSlot"), inventory.calls());
+    }
+
+    @Test
+    void noSpaceWinsBeforeGenerationExhaustion() {
+        var playerId = UUID.fromString("0689100a-a871-4ea7-a6b8-ac950cc0fa99");
+        var originalBond = new EchoBond(true, Integer.MAX_VALUE, 10L);
+        var inventoryWithoutSpace = new RecordingInventory(false, true);
+
+        var result = service.recover(playerId, originalBond, 20L, inventoryWithoutSpace);
+
+        assertEquals(RecoveryStatus.NO_SPACE, result.status());
+        assertSame(originalBond, result.bond());
+        assertTrue(result.identity().isEmpty());
+        assertEquals(0, inventoryWithoutSpace.insertCalls());
+        assertEquals(List.of("hasFreeSlot"), inventoryWithoutSpace.calls());
+    }
+
+    @Test
+    void malformedOwnerReturnsCodecError() {
+        var malformedIdentity = JsonParser.parseString("""
+                {
+                  "owner": "not-a-uuid",
+                  "generation": 1
+                }
+                """);
+
+        var result = assertDoesNotThrow(
+                () -> EchoIdentity.CODEC.parse(JsonOps.INSTANCE, malformedIdentity));
+
+        assertTrue(result.error().isPresent());
+    }
+
     private static final class RecordingInventory implements EchoInventory {
         private final boolean hasFreeSlot;
         private final boolean acceptsInsertion;
+        private final List<String> calls = new ArrayList<>();
         private int insertCalls;
         private EchoIdentity insertedIdentity;
 
@@ -138,11 +191,13 @@ class EchoRecoveryServiceTest {
 
         @Override
         public boolean hasFreeSlot() {
+            calls.add("hasFreeSlot");
             return hasFreeSlot;
         }
 
         @Override
         public boolean insert(EchoIdentity identity) {
+            calls.add("insert");
             insertCalls++;
             insertedIdentity = identity;
             return acceptsInsertion;
@@ -154,6 +209,10 @@ class EchoRecoveryServiceTest {
 
         private EchoIdentity insertedIdentity() {
             return insertedIdentity;
+        }
+
+        private List<String> calls() {
+            return List.copyOf(calls);
         }
     }
 }
