@@ -26,6 +26,7 @@ import org.rllabs.afterlight.echo.EchoItem;
 import org.rllabs.afterlight.gate.GateControllerBlock;
 import org.rllabs.afterlight.gate.GateControllerBlockEntity;
 import org.rllabs.afterlight.gate.GateFieldBlock;
+import org.rllabs.afterlight.gate.GateFieldBlockEntity;
 import org.rllabs.afterlight.network.AfterlightPayloads;
 import org.rllabs.afterlight.relay.FutureConsoleBlock;
 import org.rllabs.afterlight.relay.ReturnTerminalBlock;
@@ -114,6 +115,12 @@ public final class EchoContent {
                     "gate_controller",
                     () -> BlockEntityType.Builder.of(
                                     GateControllerBlockEntity::new, GATE_CONTROLLER.get())
+                            .build(null));
+    public static final DeferredHolder<BlockEntityType<?>, BlockEntityType<GateFieldBlockEntity>>
+            GATE_FIELD_BLOCK_ENTITY = BLOCK_ENTITIES.register(
+                    "gate_field",
+                    () -> BlockEntityType.Builder.of(
+                                    GateFieldBlockEntity::new, GATE_FIELD.get())
                             .build(null));
 
     public static final DeferredItem<?> GATE_FRAME_ITEM = ITEMS.registerSimpleBlockItem(GATE_FRAME);

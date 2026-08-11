@@ -57,6 +57,12 @@ class GateRegistryContractTest {
         assertTrue(EchoContent.GATE_CONTROLLER_BLOCK_ENTITY
                 .get()
                 .isValid(EchoContent.GATE_CONTROLLER.get().defaultBlockState()));
+        assertSame(
+                EchoContent.GATE_FIELD_BLOCK_ENTITY.get(),
+                BuiltInRegistries.BLOCK_ENTITY_TYPE.get(id("gate_field")));
+        assertTrue(EchoContent.GATE_FIELD_BLOCK_ENTITY
+                .get()
+                .isValid(EchoContent.GATE_FIELD.get().defaultBlockState()));
     }
 
     @Test
