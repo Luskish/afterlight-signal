@@ -1,0 +1,14 @@
+{
+  "item.afterlight.echo": "ECHO Unit",
+  "message.afterlight.echo.no_space": "ECHO: Inventory capacity required.",
+  "message.afterlight.echo.insertion_failed": "ECHO: Transfer failed. Retry.",
+  "message.afterlight.echo.generation_exhausted": "ECHO: Recovery sequence exhausted.",
+  "message.afterlight.echo.foreign_unit": "ECHO: Unit bound to another operator.",
+  "message.afterlight.echo.superseded_unit": "ECHO: Unit superseded. Recover current signal.",
+  "message.afterlight.echo.recovery_success": "ECHO: Continuity restored. Unit %s issued.",
+  "message.afterlight.echo.first_issue": "ECHO: Emergency Continuity Heuristic Orchestrator online.",
+  "message.afterlight.echo.inspect": "ECHO: %s, issued=%s, generation=%s, issued_at=%s.",
+  "message.afterlight.echo.signal_not_acquired": "ECHO: Signal not acquired.",
+  "screen.afterlight.echo.placeholder.title": "Signal Reliquary",
+  "screen.afterlight.echo.placeholder.body": "ECHO: Interface link confirmed."
+}

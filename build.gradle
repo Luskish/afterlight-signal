@@ -24,7 +24,17 @@ repositories {
 
 neoForge {
     version = project.neo_version
-    mods { afterlight { sourceSet sourceSets.main } }
+    mods {
+        afterlight {
+            sourceSet sourceSets.main
+            sourceSet sourceSets.test
+        }
+    }
+    runs {
+        gameTestServer {
+            type = "gameTestServer"
+        }
+    }
     unitTest { enable(); testedMod = mods.afterlight }
 }
 
