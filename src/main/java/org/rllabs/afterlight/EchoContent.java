@@ -5,6 +5,8 @@ import net.minecraft.core.component.DataComponentType;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.sounds.SoundEvent;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Rarity;
 import net.minecraft.world.level.Level;
@@ -43,6 +45,8 @@ public final class EchoContent {
     private static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
             DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, Afterlight.MOD_ID);
     private static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(Afterlight.MOD_ID);
+    private static final DeferredRegister<SoundEvent> SOUND_EVENTS =
+            DeferredRegister.create(Registries.SOUND_EVENT, Afterlight.MOD_ID);
 
     private static final StreamCodec<RegistryFriendlyByteBuf, EchoIdentity> ECHO_IDENTITY_STREAM_CODEC = StreamCodec.of(
             (buffer, identity) -> {
@@ -145,6 +149,13 @@ public final class EchoContent {
     public static final DeferredItem<?> FUTURE_CONSOLE_ITEM =
             ITEMS.registerSimpleBlockItem(FUTURE_CONSOLE);
 
+    public static final DeferredHolder<SoundEvent, SoundEvent> GATE_OPEN = SOUND_EVENTS.register(
+            "gate_open", () -> SoundEvent.createVariableRangeEvent(id("gate_open")));
+    public static final DeferredHolder<SoundEvent, SoundEvent> GATE_CLOSE = SOUND_EVENTS.register(
+            "gate_close", () -> SoundEvent.createVariableRangeEvent(id("gate_close")));
+    public static final DeferredHolder<SoundEvent, SoundEvent> GATE_FAULT = SOUND_EVENTS.register(
+            "gate_fault", () -> SoundEvent.createVariableRangeEvent(id("gate_fault")));
+
     private EchoContent() {
     }
 
@@ -154,6 +165,11 @@ public final class EchoContent {
         BLOCKS.register(modBus);
         BLOCK_ENTITIES.register(modBus);
         ITEMS.register(modBus);
+        SOUND_EVENTS.register(modBus);
         modBus.addListener(AfterlightPayloads::register);
+    }
+
+    private static ResourceLocation id(String path) {
+        return ResourceLocation.fromNamespaceAndPath(Afterlight.MOD_ID, path);
     }
 }

@@ -1,0 +1,5 @@
+{
+  "variants": {
+    "": { "model": "afterlight:block/relay_stone" }
+  }
+}

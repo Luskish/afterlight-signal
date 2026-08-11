@@ -1,0 +1,8 @@
+{
+  "ambientocclusion": false,
+  "render_type": "minecraft:translucent",
+  "textures": {
+    "particle": "afterlight:block/gate_field"
+  },
+  "elements": []
+}

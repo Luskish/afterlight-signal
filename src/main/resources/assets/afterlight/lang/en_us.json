@@ -42,5 +42,15 @@
   "screen.afterlight.echo.action.claim": "Claim",
   "screen.afterlight.echo.action.pin": "Pin",
   "screen.afterlight.echo.action.unpin": "Unpin",
-  "screen.afterlight.echo.action.archive": "Archive"
+  "screen.afterlight.echo.action.archive": "Archive",
+  "block.afterlight.gate_frame": "Reliquary Gate Frame",
+  "block.afterlight.signal_glass": "Smoked Signal Glass",
+  "block.afterlight.gate_controller": "Gate Controller",
+  "block.afterlight.gate_field": "Signal Transit Field",
+  "block.afterlight.relay_stone": "Relay Stone",
+  "block.afterlight.return_terminal": "Return Terminal",
+  "block.afterlight.future_console": "Future-Fork Console",
+  "subtitle.afterlight.gate_open": "Gate signal resolves",
+  "subtitle.afterlight.gate_close": "Gate signal collapses",
+  "subtitle.afterlight.gate_fault": "Gate fault alarm"
 }

@@ -1,0 +1,20 @@
+{
+  "gate_open": {
+    "subtitle": "subtitle.afterlight.gate_open",
+    "sounds": [
+      { "name": "afterlight:gate_open", "stream": false, "volume": 0.8, "pitch": 1.0 }
+    ]
+  },
+  "gate_close": {
+    "subtitle": "subtitle.afterlight.gate_close",
+    "sounds": [
+      { "name": "afterlight:gate_close", "stream": false, "volume": 0.75, "pitch": 0.92 }
+    ]
+  },
+  "gate_fault": {
+    "subtitle": "subtitle.afterlight.gate_fault",
+    "sounds": [
+      { "name": "afterlight:gate_fault", "stream": false, "volume": 0.9, "pitch": 0.86 }
+    ]
+  }
+}

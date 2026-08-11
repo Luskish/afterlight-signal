@@ -97,6 +97,10 @@ class ReleaseJarContractTest {
             "org/rllabs/afterlight/client/EchoScreenModel$ActionState.class",
             "org/rllabs/afterlight/client/EchoScreenModel.class",
             "org/rllabs/afterlight/client/EchoTooltip.class",
+            "org/rllabs/afterlight/client/FarRelayEffects.class",
+            "org/rllabs/afterlight/client/GateRenderer$1.class",
+            "org/rllabs/afterlight/client/GateRenderer$Transition.class",
+            "org/rllabs/afterlight/client/GateRenderer.class",
             "org/rllabs/afterlight/client/SignalClientConfig.class",
             "org/rllabs/afterlight/client/SignalTitleScreen$ButtonDecoration.class",
             "org/rllabs/afterlight/client/SignalTitleScreen$ClientAccess.class",
@@ -186,12 +190,52 @@ class ReleaseJarContractTest {
             "META-INF/neoforge.mods.toml",
             "assets/",
             "assets/afterlight/",
+            "assets/afterlight/sounds.json",
+            "assets/afterlight/blockstates/",
+            "assets/afterlight/blockstates/future_console.json",
+            "assets/afterlight/blockstates/gate_controller.json",
+            "assets/afterlight/blockstates/gate_field.json",
+            "assets/afterlight/blockstates/gate_frame.json",
+            "assets/afterlight/blockstates/relay_stone.json",
+            "assets/afterlight/blockstates/return_terminal.json",
+            "assets/afterlight/blockstates/signal_glass.json",
             "assets/afterlight/lang/",
             "assets/afterlight/lang/en_us.json",
             "assets/afterlight/models/",
+            "assets/afterlight/models/block/",
+            "assets/afterlight/models/block/future_console.json",
+            "assets/afterlight/models/block/gate_controller.json",
+            "assets/afterlight/models/block/gate_controller_fault.json",
+            "assets/afterlight/models/block/gate_controller_open.json",
+            "assets/afterlight/models/block/gate_field.json",
+            "assets/afterlight/models/block/gate_frame.json",
+            "assets/afterlight/models/block/relay_stone.json",
+            "assets/afterlight/models/block/return_terminal.json",
+            "assets/afterlight/models/block/signal_glass.json",
             "assets/afterlight/models/item/",
             "assets/afterlight/models/item/echo.json",
+            "assets/afterlight/models/item/future_console.json",
+            "assets/afterlight/models/item/gate_controller.json",
+            "assets/afterlight/models/item/gate_frame.json",
+            "assets/afterlight/models/item/relay_stone.json",
+            "assets/afterlight/models/item/return_terminal.json",
+            "assets/afterlight/models/item/signal_glass.json",
+            "assets/afterlight/sounds/",
+            "assets/afterlight/sounds/gate_close.ogg",
+            "assets/afterlight/sounds/gate_fault.ogg",
+            "assets/afterlight/sounds/gate_open.ogg",
             "assets/afterlight/textures/",
+            "assets/afterlight/textures/block/",
+            "assets/afterlight/textures/block/future_console.png",
+            "assets/afterlight/textures/block/gate_controller.png",
+            "assets/afterlight/textures/block/gate_controller_fault.png",
+            "assets/afterlight/textures/block/gate_controller_open.png",
+            "assets/afterlight/textures/block/gate_field.png",
+            "assets/afterlight/textures/block/gate_field.png.mcmeta",
+            "assets/afterlight/textures/block/gate_frame.png",
+            "assets/afterlight/textures/block/relay_stone.png",
+            "assets/afterlight/textures/block/return_terminal.png",
+            "assets/afterlight/textures/block/signal_glass.png",
             "assets/afterlight/textures/gui/",
             "assets/afterlight/textures/gui/echo_panel.png",
             "assets/afterlight/textures/gui/title.png",
@@ -207,6 +251,13 @@ class ReleaseJarContractTest {
             "data/afterlight/dimension_type/",
             "data/afterlight/dimension_type/far_relay.json",
             "data/afterlight/loot_table/",
+            "data/afterlight/loot_table/blocks/",
+            "data/afterlight/loot_table/blocks/future_console.json",
+            "data/afterlight/loot_table/blocks/gate_controller.json",
+            "data/afterlight/loot_table/blocks/gate_frame.json",
+            "data/afterlight/loot_table/blocks/relay_stone.json",
+            "data/afterlight/loot_table/blocks/return_terminal.json",
+            "data/afterlight/loot_table/blocks/signal_glass.json",
             "data/afterlight/loot_table/chests/",
             "data/afterlight/loot_table/chests/far_relay.json",
             "data/afterlight/recipe/",
@@ -227,6 +278,30 @@ class ReleaseJarContractTest {
             assertEquals(EXPECTED_ENTRIES, entries.stream().map(ZipEntry::getName).toList());
             entries.forEach(entry -> assertEquals(
                     REPRODUCIBLE_TIMESTAMP, entry.getTimeLocal(), entry.getName()));
+        }
+    }
+
+    @Test
+    void visualHarnessStaysInTestSourceWhileProductionPresentationShips() throws Exception {
+        assertTrue(Files.isRegularFile(ROOT.resolve(
+                "src/test/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java")));
+        assertTrue(Files.isRegularFile(ROOT.resolve(
+                "src/test/java/org/rllabs/afterlight/gate/VisualAcceptanceServerHarness.java")));
+        assertFalse(Files.exists(ROOT.resolve(
+                "src/main/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java")));
+        assertFalse(Files.exists(ROOT.resolve(
+                "src/main/java/org/rllabs/afterlight/gate/VisualAcceptanceServerHarness.java")));
+
+        try (var zip = new ZipFile(RELEASE_JAR.toFile())) {
+            Set<String> entries = Collections.list(zip.entries()).stream()
+                    .map(ZipEntry::getName)
+                    .collect(java.util.stream.Collectors.toSet());
+            assertTrue(entries.contains("org/rllabs/afterlight/client/FarRelayEffects.class"));
+            assertTrue(entries.contains("org/rllabs/afterlight/client/GateRenderer.class"));
+            assertTrue(entries.contains("assets/afterlight/textures/block/gate_field.png"));
+            assertTrue(entries.contains("assets/afterlight/sounds/gate_open.ogg"));
+            assertTrue(entries.contains("data/afterlight/loot_table/blocks/gate_controller.json"));
+            assertFalse(entries.stream().anyMatch(name -> name.contains("VisualAcceptance")));
         }
     }
 

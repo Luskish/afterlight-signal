@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "particle": "afterlight:block/gate_frame",
+    "down": "afterlight:block/gate_frame",
+    "up": "afterlight:block/gate_frame",
+    "north": "afterlight:block/gate_controller",
+    "south": "afterlight:block/gate_frame",
+    "west": "afterlight:block/gate_frame",
+    "east": "afterlight:block/gate_frame"
+  }
+}

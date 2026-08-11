@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "afterlight:block/gate_controller" },
+    "facing=east": { "model": "afterlight:block/gate_controller", "y": 90 },
+    "facing=south": { "model": "afterlight:block/gate_controller", "y": 180 },
+    "facing=west": { "model": "afterlight:block/gate_controller", "y": 270 }
+  }
+}

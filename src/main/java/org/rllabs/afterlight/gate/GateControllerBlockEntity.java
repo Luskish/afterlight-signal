@@ -7,9 +7,14 @@ import net.minecraft.core.HolderLookup;
 import net.minecraft.core.SectionPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.network.protocol.Packet;
+import net.minecraft.network.protocol.game.ClientGamePacketListener;
+import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
@@ -70,7 +75,7 @@ public final class GateControllerBlockEntity extends BlockEntity {
             return false;
         }
         coreStack = source.split(1);
-        setChanged();
+        setChangedAndSync();
         return true;
     }
 
@@ -80,7 +85,7 @@ public final class GateControllerBlockEntity extends BlockEntity {
         }
         ItemStack removed = coreStack;
         coreStack = ItemStack.EMPTY;
-        setChanged();
+        setChangedAndSync();
         return removed;
     }
 
@@ -90,7 +95,7 @@ public final class GateControllerBlockEntity extends BlockEntity {
         }
         ItemStack removed = coreStack;
         coreStack = ItemStack.EMPTY;
-        setChanged();
+        setChangedAndSync();
         return removed;
     }
 
@@ -159,7 +164,8 @@ public final class GateControllerBlockEntity extends BlockEntity {
             }
             field.initializeOwnership(worldPosition, fieldId);
         }
-        setChanged();
+        playSound(EchoContent.GATE_OPEN.get(), 0.88F);
+        setChangedAndSync();
         if (player != null) {
             GateTravelService.grantGateOpened(player);
         }
@@ -167,11 +173,15 @@ public final class GateControllerBlockEntity extends BlockEntity {
     }
 
     public void close() {
+        boolean wasOpen = state == GateState.OPEN;
         removeOwnedFields();
         state = GateState.IDLE;
         openDeadline = 0L;
         fieldId = null;
-        setChanged();
+        if (wasOpen) {
+            playSound(EchoContent.GATE_CLOSE.get(), 0.82F);
+        }
+        setChangedAndSync();
     }
 
     boolean ownsField(BlockPos position, UUID candidateFieldId) {
@@ -259,6 +269,16 @@ public final class GateControllerBlockEntity extends BlockEntity {
         fieldId = tag.hasUUID(FIELD_UUID_TAG) ? tag.getUUID(FIELD_UUID_TAG) : null;
     }
 
+    @Override
+    public Packet<ClientGamePacketListener> getUpdatePacket() {
+        return ClientboundBlockEntityDataPacket.create(this);
+    }
+
+    @Override
+    public CompoundTag getUpdateTag(HolderLookup.Provider registries) {
+        return saveWithoutMetadata(registries);
+    }
+
     private boolean validOpenState() {
         if (!(level instanceof ServerLevel serverLevel)
                 || !persistentStateValid
@@ -299,7 +319,8 @@ public final class GateControllerBlockEntity extends BlockEntity {
         state = GateState.FAULT;
         openDeadline = 0L;
         fieldId = null;
-        setChanged();
+        playSound(EchoContent.GATE_FAULT.get(), 0.95F);
+        setChangedAndSync();
     }
 
     private void removeOwnedFields() {
@@ -353,6 +374,26 @@ public final class GateControllerBlockEntity extends BlockEntity {
                         ChunkStatus.FULL,
                         false)
                 != null;
+    }
+
+    private void setChangedAndSync() {
+        setChanged();
+        if (level != null && !level.isClientSide()) {
+            BlockState state = getBlockState();
+            level.sendBlockUpdated(worldPosition, state, state, Block.UPDATE_CLIENTS);
+        }
+    }
+
+    private void playSound(SoundEvent sound, float pitch) {
+        if (level instanceof ServerLevel serverLevel) {
+            serverLevel.playSound(
+                    null,
+                    worldPosition,
+                    sound,
+                    SoundSource.BLOCKS,
+                    0.9F,
+                    pitch);
+        }
     }
 
     static boolean isGateCore(ItemStack stack) {

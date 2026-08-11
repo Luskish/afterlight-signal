@@ -17,6 +17,8 @@ base {
 }
 
 def dedicatedAcceptanceMarker = layout.buildDirectory.file('dedicated-acceptance-success.txt')
+def visualAcceptanceOutput = layout.buildDirectory.dir('visual-artifacts')
+def visualServerMarker = layout.buildDirectory.file('visual-server-ready.txt')
 
 java {
     toolchain {
@@ -41,6 +43,27 @@ neoForge {
     runs {
         client {
             client()
+        }
+        visualClient {
+            client()
+            gameDirectory = layout.buildDirectory.dir('visual-client')
+            systemProperty 'afterlight.visual.acceptance', 'true'
+            systemProperty 'afterlight.visual.role', 'client'
+            systemProperty 'afterlight.visual.output',
+                    visualAcceptanceOutput.get().asFile.absolutePath
+            programArgument '--width'
+            programArgument '1920'
+            programArgument '--height'
+            programArgument '1080'
+        }
+        visualServer {
+            server()
+            gameDirectory = layout.buildDirectory.dir('visual-server')
+            systemProperty 'afterlight.visual.acceptance', 'true'
+            systemProperty 'afterlight.visual.role', 'server'
+            systemProperty 'afterlight.visual.server.marker',
+                    visualServerMarker.get().asFile.absolutePath
+            programArgument '--nogui'
         }
         gameTestServer {
             if (providers.gradleProperty('afterlightDedicatedAcceptance').orNull == 'true') {
@@ -241,6 +264,54 @@ spawn-protection=0
             if (!dedicatedAcceptanceMarker.get().asFile.isFile()) {
                 throw new GradleException('Dedicated acceptance did not write its success marker')
             }
+        }
+    }
+}
+
+tasks.register('prepareVisualServerWorkspace') {
+    doLast {
+        def directory = layout.buildDirectory.dir('visual-server').get().asFile
+        visualServerMarker.get().asFile.delete()
+        project.delete(directory)
+        directory.mkdirs()
+        new File(directory, 'eula.txt').text = 'eula=true\n'
+        new File(directory, 'server.properties').text = '''\
+allow-flight=true
+difficulty=peaceful
+enable-command-block=false
+generate-structures=false
+level-name=visual-acceptance
+level-seed=afterlight-visual-acceptance
+level-type=minecraft:flat
+max-tick-time=-1
+motd=AFTERLIGHT Visual Acceptance
+online-mode=false
+server-port=25567
+spawn-protection=0
+view-distance=12
+'''
+    }
+}
+
+tasks.register('prepareVisualClientWorkspace') {
+    doLast {
+        project.delete(visualAcceptanceOutput.get().asFile)
+        visualAcceptanceOutput.get().asFile.mkdirs()
+    }
+}
+
+tasks.named('runVisualServer') {
+    dependsOn tasks.named('prepareVisualServerWorkspace')
+}
+
+tasks.named('runVisualClient') {
+    dependsOn tasks.named('prepareVisualClientWorkspace')
+    doLast {
+        def marker = visualAcceptanceOutput.get()
+                .file('visual-acceptance-success.txt')
+                .asFile
+        if (!marker.isFile()) {
+            throw new GradleException('Visual acceptance did not write its success marker')
         }
     }
 }
