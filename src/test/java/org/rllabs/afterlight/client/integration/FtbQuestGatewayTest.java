@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.ftb.mods.ftbquests.net.ClaimRewardMessage;
 import dev.ftb.mods.ftbquests.net.SubmitTaskMessage;
 import dev.ftb.mods.ftbquests.net.TogglePinnedMessage;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -187,6 +188,18 @@ class FtbQuestGatewayTest {
     }
 
     @Test
+    void rootArchiveOpensWithoutASelectedQuest() throws Exception {
+        var access = new FakeClientAccess(stateWithEligibleObjects(false));
+        var gateway = new FtbQuestGateway(access);
+        Method openArchive = FtbQuestGateway.class.getMethod("openArchive");
+
+        openArchive.invoke(gateway);
+
+        assertEquals(1, access.openedRootArchives);
+        assertEquals(List.of(), access.openedArchiveQuests);
+    }
+
+    @Test
     void togglePinDispatchesTheExactFtbMessageForAnExistingSynchronizedQuest() {
         var access = new FakeClientAccess(stateWithEligibleObjects(false));
 
@@ -273,6 +286,7 @@ class FtbQuestGatewayTest {
         private final List<ClaimRewardMessage> claims = new ArrayList<>();
         private final List<TogglePinnedMessage> pins = new ArrayList<>();
         private final List<Long> openedArchiveQuests = new ArrayList<>();
+        private int openedRootArchives;
         private boolean connected = true;
 
         private FakeClientAccess(SynchronizedState state) {
@@ -307,6 +321,10 @@ class FtbQuestGatewayTest {
         @Override
         public void openArchive(long questId) {
             openedArchiveQuests.add(questId);
+        }
+
+        public void openArchive() {
+            openedRootArchives++;
         }
     }
 }

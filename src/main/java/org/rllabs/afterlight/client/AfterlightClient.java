@@ -20,6 +20,7 @@ public final class AfterlightClient {
     public AfterlightClient(ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.CLIENT, SignalClientConfig.SPEC);
         NeoForge.EVENT_BUS.addListener(SignalTitleScreenHook::onScreenOpening);
+        NeoForge.EVENT_BUS.addListener(EchoTooltip::onTooltip);
         AfterlightPayloads.installClientOpenHandler(AfterlightClient::openApprovedScreen);
     }
 

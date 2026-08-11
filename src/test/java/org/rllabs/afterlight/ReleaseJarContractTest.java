@@ -87,6 +87,7 @@ class ReleaseJarContractTest {
             "org/rllabs/afterlight/client/EchoScreenModel$Action.class",
             "org/rllabs/afterlight/client/EchoScreenModel$ActionState.class",
             "org/rllabs/afterlight/client/EchoScreenModel.class",
+            "org/rllabs/afterlight/client/EchoTooltip.class",
             "org/rllabs/afterlight/client/SignalClientConfig.class",
             "org/rllabs/afterlight/client/SignalTitleScreen$ButtonDecoration.class",
             "org/rllabs/afterlight/client/SignalTitleScreen$ClientAccess.class",
@@ -341,6 +342,7 @@ class ReleaseJarContractTest {
         for (String namespace : List.of(
                 "net/minecraft/client/renderer/LevelRenderer",
                 "net/neoforged/neoforge/client/event/ScreenEvent",
+                "dev/ftb/mods/ftbquests/client/ClientQuestFile",
                 "com/mojang/blaze3d/vertex/PoseStack",
                 "org/lwjgl/opengl/GL11")) {
             String common = "org/rllabs/afterlight/Fixture";

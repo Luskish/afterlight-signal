@@ -1,7 +1,9 @@
 package org.rllabs.afterlight.client;
 
 import com.mojang.authlib.minecraft.BanDetails;
+import java.util.List;
 import javax.annotation.Nullable;
+import net.minecraft.SharedConstants;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.GuiGraphics;
@@ -18,7 +20,9 @@ import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
+import net.neoforged.fml.ModList;
 import net.neoforged.neoforge.client.gui.ModListScreen;
+import org.rllabs.afterlight.Afterlight;
 
 public final class SignalTitleScreen extends Screen {
     private static final ResourceLocation BACKGROUND =
@@ -100,9 +104,13 @@ public final class SignalTitleScreen extends Screen {
 
     @Override
     public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        super.render(graphics, mouseX, mouseY, partialTick);
+    }
+
+    @Override
+    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         renderCoverBackground(graphics);
         renderReliquaryFrame(graphics);
-        super.render(graphics, mouseX, mouseY, partialTick);
     }
 
     private void renderCoverBackground(GuiGraphics graphics) {
@@ -152,9 +160,21 @@ public final class SignalTitleScreen extends Screen {
         if (this.width >= 360 && this.height >= 180) {
             graphics.drawString(this.font, this.getTitle(), 22, 22, PALE_SIGNAL, true);
             graphics.fill(22, 34, Math.min(214, panelX - 12), 35, SIGNAL_CYAN);
-            graphics.drawString(this.font, Component.literal("ECHO CARRIER: STANDBY"), 22, 42, SIGNAL_CYAN, false);
+            int statusY = 42;
+            for (Component statusLine : statusLines()) {
+                graphics.drawString(this.font, statusLine, 22, statusY, statusY == 75 ? SIGNAL_CYAN : PALE_SIGNAL, false);
+                statusY += 11;
+            }
             graphics.drawString(this.font, Component.literal("RELAY 07 / DAWN RECOVERY"), 22, this.height - 22, RELIQUARY_AMBER, false);
         }
+    }
+
+    private List<Component> statusLines() {
+        return List.of(
+                Component.literal("PACK VERSION // " + this.client.packVersion()),
+                Component.literal("MINECRAFT // " + this.client.minecraftVersion()),
+                Component.literal("NEOFORGE // " + this.client.neoForgeVersion()),
+                Component.literal("ECHO CARRIER // STANDBY"));
     }
 
     private MenuGeometry menuGeometry() {
@@ -265,6 +285,12 @@ public final class SignalTitleScreen extends Screen {
 
         Options options();
 
+        String packVersion();
+
+        String minecraftVersion();
+
+        String neoForgeVersion();
+
         void setScreen(Screen screen);
 
         void stop();
@@ -298,6 +324,21 @@ public final class SignalTitleScreen extends Screen {
         }
 
         @Override
+        public String packVersion() {
+            return modVersion(Afterlight.MOD_ID);
+        }
+
+        @Override
+        public String minecraftVersion() {
+            return SharedConstants.getCurrentVersion().getName();
+        }
+
+        @Override
+        public String neoForgeVersion() {
+            return modVersion("neoforge");
+        }
+
+        @Override
         public void setScreen(Screen screen) {
             Minecraft.getInstance().setScreen(screen);
         }
@@ -305,6 +346,13 @@ public final class SignalTitleScreen extends Screen {
         @Override
         public void stop() {
             Minecraft.getInstance().stop();
+        }
+
+        private static String modVersion(String modId) {
+            return ModList.get()
+                    .getModContainerById(modId)
+                    .map(container -> container.getModInfo().getVersion().toString())
+                    .orElse("UNAVAILABLE");
         }
     }
 }

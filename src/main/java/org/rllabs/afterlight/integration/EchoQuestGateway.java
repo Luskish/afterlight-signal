@@ -13,5 +13,7 @@ public interface EchoQuestGateway {
 
     void togglePin(long questId);
 
+    void openArchive();
+
     void openArchive(long questId);
 }

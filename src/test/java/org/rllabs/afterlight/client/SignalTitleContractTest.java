@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import com.mojang.authlib.minecraft.BanDetails;
 import java.awt.image.BufferedImage;
+import java.io.InputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -33,6 +34,7 @@ import javax.imageio.stream.ImageInputStream;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.ComponentPath;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.narration.NarratedElementType;
 import net.minecraft.client.gui.narration.NarrationElementOutput;
@@ -52,6 +54,11 @@ import net.neoforged.neoforge.client.gui.ModListScreen;
 import net.neoforged.neoforge.common.ModConfigSpec;
 import net.neoforged.neoforgespi.language.IModInfo;
 import org.junit.jupiter.api.Test;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
+import org.objectweb.asm.Type;
 import sun.misc.Unsafe;
 
 class SignalTitleContractTest {
@@ -187,6 +194,38 @@ class SignalTitleContractTest {
     }
 
     @Test
+    void customLayersRenderFromTheBackgroundOverrideBeforeInheritedWidgets() throws Exception {
+        String descriptor = Type.getMethodDescriptor(
+                Type.VOID_TYPE,
+                Type.getType(GuiGraphics.class),
+                Type.INT_TYPE,
+                Type.INT_TYPE,
+                Type.FLOAT_TYPE);
+
+        assertEquals(
+                List.of("renderCoverBackground", "renderReliquaryFrame"),
+                ownMethodCalls("renderBackground", descriptor));
+        assertEquals(List.of(), ownMethodCalls("render", descriptor));
+    }
+
+    @Test
+    void titleStatusReportsPackMinecraftNeoForgeAndEcho() throws Exception {
+        SignalTitleScreen screen = initializedScreen(new RecordingClient(), 854, 480);
+
+        assertEquals(
+                List.of(
+                        "PACK VERSION // 1.0.0-rc.1",
+                        "MINECRAFT // 1.21.1",
+                        "NEOFORGE // 21.1.248",
+                        "ECHO CARRIER // STANDBY"),
+                statusLines(screen));
+        assertTrue(ownMethodCalls(
+                        "renderReliquaryFrame",
+                        Type.getMethodDescriptor(Type.VOID_TYPE, Type.getType(GuiGraphics.class)))
+                .contains("statusLines"));
+    }
+
+    @Test
     void menuGeometryIsDeterministicAtMinimumAndNarrowFallback() {
         Geometry minimum = menuGeometry(854, 480);
         assertEquals(new Geometry(616, 182, 210, 20, 4, 116, 298), minimum);
@@ -316,6 +355,48 @@ class SignalTitleContractTest {
         return (int) method.invoke(record);
     }
 
+    private static List<String> ownMethodCalls(String methodName, String descriptor) throws Exception {
+        String resourceName = "/" + SignalTitleScreen.class.getName().replace('.', '/') + ".class";
+        try (InputStream input = SignalTitleScreen.class.getResourceAsStream(resourceName)) {
+            assertNotNull(input, resourceName);
+            List<String> calls = new ArrayList<>();
+            new ClassReader(input).accept(new ClassVisitor(Opcodes.ASM9) {
+                @Override
+                public MethodVisitor visitMethod(
+                        int access,
+                        String name,
+                        String methodDescriptor,
+                        String signature,
+                        String[] exceptions) {
+                    if (!methodName.equals(name) || !descriptor.equals(methodDescriptor)) {
+                        return null;
+                    }
+                    return new MethodVisitor(Opcodes.ASM9) {
+                        @Override
+                        public void visitMethodInsn(
+                                int opcode,
+                                String owner,
+                                String name,
+                                String invokedDescriptor,
+                                boolean isInterface) {
+                            if (owner.equals("org/rllabs/afterlight/client/SignalTitleScreen")) {
+                                calls.add(name);
+                            }
+                        }
+                    };
+                }
+            }, 0);
+            return List.copyOf(calls);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<String> statusLines(SignalTitleScreen screen) throws Exception {
+        Method method = SignalTitleScreen.class.getDeclaredMethod("statusLines");
+        method.setAccessible(true);
+        return ((List<Component>) method.invoke(screen)).stream().map(Component::getString).toList();
+    }
+
     private record Geometry(
             int x,
             int y,
@@ -363,6 +444,18 @@ class SignalTitleContractTest {
         @Override
         public void stop() {
             this.stopped = true;
+        }
+
+        public String packVersion() {
+            return "1.0.0-rc.1";
+        }
+
+        public String minecraftVersion() {
+            return "1.21.1";
+        }
+
+        public String neoForgeVersion() {
+            return "21.1.248";
         }
     }
 

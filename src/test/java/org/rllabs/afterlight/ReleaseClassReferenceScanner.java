@@ -28,6 +28,7 @@ final class ReleaseClassReferenceScanner {
     private static final Set<String> EXTERNAL_CLIENT_PACKAGES = Set.of(
             "net/minecraft/client/",
             "net/neoforged/neoforge/client/",
+            "dev/ftb/mods/ftbquests/client/",
             "com/mojang/blaze3d/",
             "org/lwjgl/");
 

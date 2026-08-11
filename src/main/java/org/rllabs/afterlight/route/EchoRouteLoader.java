@@ -25,6 +25,7 @@ public final class EchoRouteLoader {
     public static final Path DEFAULT_PATH = Path.of("config/afterlight/echo_route.json");
 
     private static final Pattern HEX_ID = Pattern.compile("[0-9A-Fa-f]{1,16}");
+    private static final long ESTABLISHED_FINALE_ID = Long.parseUnsignedLong("31C9557D2F51238F", 16);
 
     public EchoRoute load() throws IOException, RouteValidationException {
         return load(DEFAULT_PATH);
@@ -55,10 +56,16 @@ public final class EchoRouteLoader {
         List<SegmentDraft> segments = readSegments(object, errors);
 
         validateGraph(segments, errors);
-        if (terminalQuestId != null && segments.stream()
-                .flatMap(segment -> segment.quests().stream())
-                .noneMatch(terminalQuestId::equals)) {
-            errors.add("terminal quest " + EchoRoute.formatQuestId(terminalQuestId) + " is absent from the route");
+        if (terminalQuestId != null) {
+            boolean terminalPresent = segments.stream()
+                    .flatMap(segment -> segment.quests().stream())
+                    .anyMatch(terminalQuestId::equals);
+            if (!terminalPresent) {
+                errors.add("terminal quest " + EchoRoute.formatQuestId(terminalQuestId) + " is absent from the route");
+            } else if (errors.isEmpty() && terminalQuestId != ESTABLISHED_FINALE_ID) {
+                errors.add("terminal quest " + EchoRoute.formatQuestId(terminalQuestId)
+                        + " does not match established finale " + EchoRoute.formatQuestId(ESTABLISHED_FINALE_ID));
+            }
         }
 
         if (!errors.isEmpty()) {

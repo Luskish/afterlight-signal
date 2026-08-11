@@ -172,6 +172,30 @@ class EchoRouteLoaderTest {
     }
 
     @Test
+    void acceptsTheEstablishedPackFinaleAsTerminal() throws Exception {
+        EchoRoute route = loader.load(new StringReader("""
+                {"schema":1,"terminal_quest":"31C9557D2F51238F","segments":[
+                  {"id":"story","after":[],"quests":["01","31C9557D2F51238F"]}
+                ]}
+                """));
+
+        assertEquals(Long.parseUnsignedLong("31C9557D2F51238F", 16), route.terminalQuestId());
+    }
+
+    @Test
+    void rejectsAnInRouteSideQuestAsTerminal() {
+        RouteValidationException exception = assertInvalid("""
+                {"schema":1,"terminal_quest":"01","segments":[
+                  {"id":"story","after":[],"quests":["01","31C9557D2F51238F"]}
+                ]}
+                """);
+
+        assertEquals(List.of(
+                "terminal quest 0000000000000001 does not match established finale 31C9557D2F51238F"),
+                exception.errors());
+    }
+
+    @Test
     void returnsAllValidationErrorsInDeterministicOrder() {
         String invalid = """
                 {"schema":7,"terminal_quest":"FE","segments":[

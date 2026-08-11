@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Method;
 import java.util.List;
 import java.util.Map;
 import java.util.OptionalLong;
@@ -88,14 +89,14 @@ class EchoScreenModelTest {
     }
 
     @Test
-    void signalMissingDisablesMutationActions() {
+    void signalMissingDisablesMutationActionsAndKeepsArchive() {
         EchoScreenModel model = EchoScreenModel.from(
                 route(), Map.of(), EchoRecommendation.signalUnavailable(QUEST_ID));
 
         assertFalse(model.action(Action.SUBMIT).enabled());
         assertFalse(model.action(Action.CLAIM).enabled());
         assertFalse(model.action(Action.PIN).enabled());
-        assertFalse(model.action(Action.ARCHIVE).enabled());
+        assertTrue(model.action(Action.ARCHIVE).enabled());
     }
 
     @Test
@@ -131,6 +132,84 @@ class EchoScreenModelTest {
 
         assertTrue(model.pinned());
         assertEquals(Component.translatable("screen.afterlight.echo.action.unpin"), model.pinLabel());
+    }
+
+    @Test
+    void exposesHeaderPrerequisitesTasksExactValuesAndCompletionState() throws Exception {
+        long firstQuestId = 0x10L;
+        TaskSnapshot selectedTask = new TaskSnapshot(
+                TASK_ID,
+                "Check the relay",
+                2L,
+                5L,
+                false,
+                true,
+                true,
+                true);
+        TaskSnapshot completedTask = new TaskSnapshot(
+                0x22L,
+                "Stabilize the carrier",
+                1L,
+                1L,
+                true,
+                false,
+                true,
+                false);
+        EchoRoute route = new EchoRoute(
+                1,
+                QUEST_ID,
+                List.of(
+                        new EchoRoute.Segment("act_i", List.of(), List.of(firstQuestId)),
+                        new EchoRoute.Segment("act_ii", List.of("act_i"), List.of(QUEST_ID))));
+        EchoQuestSnapshot first = new EchoQuestSnapshot(
+                firstQuestId,
+                "Cold Boot",
+                "Signal restored",
+                true,
+                false,
+                false,
+                List.of(),
+                List.of(),
+                List.of());
+        EchoQuestSnapshot selected = new EchoQuestSnapshot(
+                QUEST_ID,
+                "Signal Trace",
+                "Recover the missing carrier",
+                false,
+                true,
+                false,
+                List.of(0x01L),
+                List.of(selectedTask, completedTask),
+                List.of());
+
+        EchoScreenModel model = EchoScreenModel.from(
+                route,
+                Map.of(firstQuestId, first, QUEST_ID, selected),
+                EchoRecommendation.submitTask(QUEST_ID, OptionalLong.of(TASK_ID), false));
+
+        assertEquals("ACT // ACT II", component(model, "currentAct").getString());
+        assertEquals("MEMORY // 1", component(model, "memoryCount").getString());
+        assertEquals(
+                List.of("PREREQUISITE // 0000000000000001"),
+                components(model, "prerequisites").stream().map(Component::getString).toList());
+        assertEquals(
+                List.of(
+                        "TASK // Check the relay // 2 / 5 // INCOMPLETE",
+                        "TASK // Stabilize the carrier // 1 / 1 // COMPLETE"),
+                components(model, "tasks").stream().map(Component::getString).toList());
+        assertEquals("TASK VALUE // 2 / 5", component(model, "progressValue").getString());
+        assertEquals("TASK INCOMPLETE", component(model, "completionState").getString());
+    }
+
+    private static Component component(EchoScreenModel model, String methodName) throws Exception {
+        Method method = EchoScreenModel.class.getMethod(methodName);
+        return (Component) method.invoke(model);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Component> components(EchoScreenModel model, String methodName) throws Exception {
+        Method method = EchoScreenModel.class.getMethod(methodName);
+        return (List<Component>) method.invoke(model);
     }
 
     private static EchoScreenModel claimModel(RewardSnapshot reward) {

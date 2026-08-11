@@ -1,5 +1,6 @@
 package org.rllabs.afterlight.client;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
@@ -8,6 +9,8 @@ import java.util.Objects;
 import java.util.OptionalLong;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.narration.NarratedElementType;
+import net.minecraft.client.gui.narration.NarrationElementOutput;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -109,6 +112,14 @@ public class EchoScreen extends Screen {
     }
 
     @Override
+    protected void updateNarrationState(NarrationElementOutput output) {
+        super.updateNarrationState(output);
+        for (Component line : model.narrationLines()) {
+            output.add(NarratedElementType.HINT, line);
+        }
+    }
+
+    @Override
     public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
         graphics.fill(0, 0, width, height, opaque(VAULT_BLACK));
         graphics.blit(PANEL_TEXTURE, 0, 0, width, height, 0.0F, 0.0F, 256, 256, 256, 256);
@@ -138,6 +149,10 @@ public class EchoScreen extends Screen {
     void activate(Action action) {
         Objects.requireNonNull(action);
         if (!isActionEnabled(action)) {
+            return;
+        }
+        if (action == Action.ARCHIVE && model.kind() == EchoRecommendation.Kind.SIGNAL_UNAVAILABLE) {
+            gateway.openArchive();
             return;
         }
         OptionalLong targetId = targetId(action);
@@ -174,7 +189,7 @@ public class EchoScreen extends Screen {
         try {
             Map<Long, EchoQuestSnapshot> normalized = normalizeSnapshots(gateway.snapshots(route));
             snapshotsTrusted = isCompleteTrustedSnapshot(normalized);
-            snapshots = snapshotsTrusted ? normalized : Map.of();
+            snapshots = normalized;
         } catch (RuntimeException exception) {
             snapshots = Map.of();
             snapshotsTrusted = false;
@@ -306,7 +321,25 @@ public class EchoScreen extends Screen {
     private void renderHeader(GuiGraphics graphics) {
         Rect pane = layout.header();
         drawClippedLine(graphics, title, pane, pane.y() + 4, CYAN);
-        drawWrapped(graphics, IDENTITY, pane, pane.y() + 15, BONE);
+        boolean compact = layout.mode() == EchoScreenLayout.Mode.COMPACT;
+        int y = pane.y() + 15;
+        if (!compact) {
+            drawClippedLine(graphics, IDENTITY, pane, y, BONE);
+            y += 11;
+        }
+        for (Component line : headerDetails(model, compact)) {
+            drawClippedLine(graphics, line, pane, y, line == model.stateLabel() ? AMBER : BONE);
+            y += 11;
+        }
+    }
+
+    private static List<Component> headerDetails(EchoScreenModel model, boolean compact) {
+        if (compact) {
+            return List.of(
+                    model.stateLabel(),
+                    Component.literal(model.currentAct().getString() + " // " + model.memoryCount().getString()));
+        }
+        return List.of(model.stateLabel(), model.currentAct(), model.memoryCount());
     }
 
     private void renderTranscript(GuiGraphics graphics) {
@@ -321,8 +354,11 @@ public class EchoScreen extends Screen {
         Rect pane = layout.route();
         drawPaneLabel(graphics, pane, Component.translatable(layout.paneLabels().routeKey()), BONE);
         int y = pane.y() + (pane.height() < 34 ? 13 : 15);
-        y = drawWrapped(graphics, model.questTitle(), pane, y, CYAN);
-        y = drawWrapped(graphics, model.questSubtitle(), pane, y + 2, BONE);
+        List<Component> lines = routeLines(model);
+        for (int index = 0; index < lines.size(); index++) {
+            int color = index == 0 ? CYAN : lines.get(index).getString().startsWith("PREREQUISITE") ? AMBER : BONE;
+            y = drawWrapped(graphics, lines.get(index), pane, index == 0 ? y : y + 2, color);
+        }
         if (model.selectedQuestId().isPresent() && y + 9 < pane.bottom() - 3) {
             drawClippedLine(
                     graphics,
@@ -337,14 +373,10 @@ public class EchoScreen extends Screen {
         Rect pane = layout.progress();
         drawPaneLabel(graphics, pane, Component.translatable(layout.paneLabels().progressKey()), CYAN);
         int y = pane.y() + (pane.height() < 34 ? 13 : 15);
-        Component routeProgress = Component.translatable(
-                "screen.afterlight.echo.route.progress",
-                model.routeComplete(),
-                model.routeTotal(),
-                model.routePosition());
-        y = drawWrapped(graphics, routeProgress, pane, y, BONE);
-        if (y + 9 < pane.bottom() - 8) {
-            drawWrapped(graphics, model.interactionTitle(), pane, y + 2, CYAN);
+        List<Component> lines = progressLines(model);
+        for (int index = 0; index < lines.size() && y + 9 < pane.bottom() - 8; index++) {
+            int color = index == 1 ? CYAN : index == lines.size() - 1 ? AMBER : BONE;
+            y = drawWrapped(graphics, lines.get(index), pane, index == 0 ? y : y + 2, color);
         }
         if (pane.height() >= 34) {
             int barX = pane.x() + 5;
@@ -356,6 +388,27 @@ public class EchoScreen extends Screen {
                 graphics.fill(barX, barY, barX + filled, barY + 4, opaque(CYAN));
             }
         }
+    }
+
+    private static List<Component> routeLines(EchoScreenModel model) {
+        List<Component> lines = new ArrayList<>();
+        lines.add(model.questTitle());
+        lines.add(model.questSubtitle());
+        lines.addAll(model.prerequisites());
+        lines.addAll(model.tasks());
+        return List.copyOf(lines);
+    }
+
+    private static List<Component> progressLines(EchoScreenModel model) {
+        return List.of(
+                Component.translatable(
+                        "screen.afterlight.echo.route.progress",
+                        model.routeComplete(),
+                        model.routeTotal(),
+                        model.routePosition()),
+                model.interactionTitle(),
+                model.progressValue(),
+                model.completionState());
     }
 
     private void drawPaneLabel(GuiGraphics graphics, Rect pane, Component label, int color) {

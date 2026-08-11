@@ -10,7 +10,8 @@ public final class EchoRouteResolver {
         Objects.requireNonNull(snapshots);
 
         for (long questId : route.questIds()) {
-            if (!snapshots.containsKey(questId) || snapshots.get(questId) == null) {
+            EchoQuestSnapshot snapshot = snapshots.get(questId);
+            if (snapshot == null || snapshot.questId() != questId) {
                 return EchoRecommendation.signalUnavailable(questId);
             }
         }

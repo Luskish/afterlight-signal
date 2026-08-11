@@ -104,6 +104,14 @@ public final class FtbQuestGateway implements EchoQuestGateway {
         }
     }
 
+    @Override
+    public void openArchive() {
+        SynchronizedState state = access.synchronizedState();
+        if (state != null && !state.locked()) {
+            access.openArchive();
+        }
+    }
+
     private static EchoQuestSnapshot snapshot(QuestState quest) {
         List<TaskSnapshot> tasks = quest.tasks().stream()
                 .map(FtbQuestGateway::taskSnapshot)
@@ -164,6 +172,8 @@ public final class FtbQuestGateway implements EchoQuestGateway {
         void send(ClaimRewardMessage message);
 
         void send(TogglePinnedMessage message);
+
+        void openArchive();
 
         void openArchive(long questId);
     }
@@ -278,6 +288,11 @@ public final class FtbQuestGateway implements EchoQuestGateway {
         @Override
         public void openArchive(long questId) {
             ClientQuestFile.openBookToQuestObject(questId);
+        }
+
+        @Override
+        public void openArchive() {
+            ClientQuestFile.openGui();
         }
     }
 

@@ -53,7 +53,7 @@ public record EchoScreenLayout(
 
         Mode mode = mode(logicalWidth, logicalHeight);
         int margin = mode == Mode.COMPACT ? 2 : 4;
-        int headerHeight = mode == Mode.COMPACT ? 36 : 26;
+        int headerHeight = mode == Mode.COMPACT ? 38 : 61;
         Rect header = new Rect(margin, margin, logicalWidth - margin * 2, headerHeight);
 
         if (mode == Mode.WIDE) {

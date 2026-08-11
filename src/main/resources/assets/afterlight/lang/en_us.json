@@ -1,5 +1,9 @@
 {
   "item.afterlight.echo": "ECHO Unit",
+  "tooltip.afterlight.echo.identity": "Emergency Continuity Heuristic Orchestrator",
+  "tooltip.afterlight.echo.owner": "BOUND OWNER // %s",
+  "tooltip.afterlight.echo.generation": "GENERATION // %s",
+  "tooltip.afterlight.echo.superseded": "SIGNAL SUPERSEDED",
   "message.afterlight.echo.no_space": "ECHO: Inventory capacity required.",
   "message.afterlight.echo.insertion_failed": "ECHO: Transfer failed. Retry.",
   "message.afterlight.echo.generation_exhausted": "ECHO: Recovery sequence exhausted.",
@@ -23,7 +27,7 @@
   "screen.afterlight.echo.state.locked": "ROUTE LOCKED",
   "screen.afterlight.echo.state.complete": "ROUTE COMPLETE",
   "screen.afterlight.echo.diagnostic.route_unavailable": "ECHO: Route data absent. Reliquary remains read-only.",
-  "screen.afterlight.echo.diagnostic.signal_unavailable": "ECHO: Carrier data absent. Reliquary remains read-only.",
+  "screen.afterlight.echo.diagnostic.signal_unavailable": "ECHO: Carrier %s absent. Reliquary remains read-only.",
   "screen.afterlight.echo.diagnostic.submit": "ECHO: Manual confirmation required. Submit when ready.",
   "screen.afterlight.echo.diagnostic.claim": "ECHO: Recovery complete. Claim the secured output.",
   "screen.afterlight.echo.diagnostic.archive_required": "ECHO: Direct handling unsafe. Continue in Archive.",

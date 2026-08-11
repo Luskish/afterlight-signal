@@ -8,6 +8,8 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Rarity;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.attachment.AttachmentType;
+import net.neoforged.neoforge.network.payload.SyncAttachmentsPayload;
+import net.neoforged.neoforge.network.registration.NetworkRegistry;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredItem;
 import net.neoforged.neoforge.registries.DeferredRegister;
@@ -30,6 +32,13 @@ public final class EchoContent {
                 buffer.writeVarInt(identity.generation());
             },
             buffer -> new EchoIdentity(buffer.readUUID(), buffer.readVarInt()));
+    private static final StreamCodec<RegistryFriendlyByteBuf, EchoBond> ECHO_BOND_STREAM_CODEC = StreamCodec.of(
+            (buffer, bond) -> {
+                buffer.writeBoolean(bond.issued());
+                buffer.writeInt(bond.generation());
+                buffer.writeLong(bond.issuedAtEpochSecond());
+            },
+            buffer -> new EchoBond(buffer.readBoolean(), buffer.readInt(), buffer.readLong()));
 
     public static final DeferredHolder<DataComponentType<?>, DataComponentType<EchoIdentity>> ECHO_IDENTITY =
             DATA_COMPONENTS.registerComponentType("echo_identity", builder -> builder
@@ -40,6 +49,13 @@ public final class EchoContent {
             ATTACHMENTS.register("echo_bond", () -> AttachmentType.builder(() -> EchoBond.UNISSUED)
                     .serialize(EchoBond.CODEC)
                     .copyOnDeath()
+                    .sync(
+                            (holder, recipient) -> holder == recipient
+                                    && recipient.connection != null
+                                    && NetworkRegistry.hasChannel(
+                                            recipient.connection,
+                                            SyncAttachmentsPayload.TYPE.id()),
+                            ECHO_BOND_STREAM_CODEC)
                     .build());
 
     public static final DeferredItem<EchoItem> ECHO = ITEMS.registerItem(

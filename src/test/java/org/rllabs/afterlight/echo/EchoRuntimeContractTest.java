@@ -16,6 +16,7 @@ import java.io.InputStream;
 import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -23,6 +24,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSource;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.core.RegistryAccess;
@@ -43,6 +45,7 @@ import net.minecraft.world.phys.Vec3;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.attachment.AttachmentType;
+import net.neoforged.neoforge.attachment.AttachmentSyncHandler;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.network.registration.NetworkRegistry;
 import net.neoforged.neoforge.registries.NeoForgeRegistries;
@@ -53,6 +56,7 @@ import org.rllabs.afterlight.client.AfterlightClient;
 import org.rllabs.afterlight.echo.GameTestBytecodeScanner.TargetMethod;
 import org.rllabs.afterlight.network.OpenEchoRequest;
 import org.rllabs.afterlight.network.OpenEchoScreen;
+import sun.misc.Unsafe;
 
 @SuppressWarnings("deprecation")
 class EchoRuntimeContractTest {
@@ -92,6 +96,56 @@ class EchoRuntimeContractTest {
         var stack = new ItemStack(echoItem);
         assertEquals(1, stack.getMaxStackSize());
         assertEquals(Rarity.EPIC, stack.getRarity());
+    }
+
+    @Test
+    void bondSynchronizationIsAuthoritativeOwnerOnlyAndChannelSafe() throws Exception {
+        AttachmentType<EchoBond> bondType = EchoContent.ECHO_BOND.get();
+        Field syncField = AttachmentType.class.getDeclaredField("syncHandler");
+        syncField.setAccessible(true);
+        @SuppressWarnings("unchecked")
+        AttachmentSyncHandler<EchoBond> syncHandler =
+                (AttachmentSyncHandler<EchoBond>) syncField.get(bondType);
+        assertNotNull(syncHandler);
+
+        ServerPlayer owner = uninitializedServerPlayer();
+        ServerPlayer observer = uninitializedServerPlayer();
+        assertFalse(syncHandler.sendToPlayer(owner, owner));
+        assertFalse(syncHandler.sendToPlayer(owner, observer));
+
+        EchoBond expected = new EchoBond(true, 7, 123456789L);
+        var buffer = new RegistryFriendlyByteBuf(Unpooled.buffer(), RegistryAccess.EMPTY);
+        syncHandler.write(buffer, expected, true);
+        assertEquals(expected, syncHandler.read(owner, buffer, null));
+    }
+
+    @Test
+    void echoTooltipPresentsBondAndSupersededState() throws Exception {
+        Class<?> tooltipType = Class.forName("org.rllabs.afterlight.client.EchoTooltip");
+        Method presentation = tooltipType.getDeclaredMethod(
+                "presentation",
+                EchoIdentity.class,
+                EchoBond.class,
+                String.class);
+        presentation.setAccessible(true);
+        EchoIdentity identity = new EchoIdentity(
+                UUID.fromString("a67d9398-f1f0-455f-9ce9-7fc74a409dfa"),
+                6);
+
+        assertEquals(
+                List.of(
+                        Component.translatable("tooltip.afterlight.echo.identity").withStyle(ChatFormatting.AQUA),
+                        Component.translatable("tooltip.afterlight.echo.owner", "Shane").withStyle(ChatFormatting.GRAY),
+                        Component.translatable("tooltip.afterlight.echo.generation", 6).withStyle(ChatFormatting.GOLD)),
+                components(presentation.invoke(null, identity, new EchoBond(true, 6, 1L), "Shane")));
+        assertEquals(
+                List.of(
+                        Component.translatable("tooltip.afterlight.echo.identity").withStyle(ChatFormatting.AQUA),
+                        Component.translatable("tooltip.afterlight.echo.owner", "Shane").withStyle(ChatFormatting.GRAY),
+                        Component.translatable("tooltip.afterlight.echo.generation", 6).withStyle(ChatFormatting.GOLD),
+                        Component.translatable("tooltip.afterlight.echo.superseded").withStyle(ChatFormatting.RED)),
+                components(presentation.invoke(null, identity, new EchoBond(true, 7, 2L), "Shane")));
+        assertTrue(classBytes(AfterlightClient.class).contains("EchoTooltip"));
     }
 
     @Test
@@ -155,6 +209,10 @@ class EchoRuntimeContractTest {
                 "message.afterlight.echo.first_issue",
                 "message.afterlight.echo.inspect",
                 "message.afterlight.echo.signal_not_acquired",
+                "tooltip.afterlight.echo.identity",
+                "tooltip.afterlight.echo.owner",
+                "tooltip.afterlight.echo.generation",
+                "tooltip.afterlight.echo.superseded",
                 "screen.afterlight.echo.title",
                 "screen.afterlight.echo.identity",
                 "screen.afterlight.echo.state.unavailable",
@@ -167,6 +225,12 @@ class EchoRuntimeContractTest {
                 "screen.afterlight.echo.action.pin",
                 "screen.afterlight.echo.action.unpin",
                 "screen.afterlight.echo.action.archive")));
+        assertEquals(
+                "Emergency Continuity Heuristic Orchestrator",
+                language.get("tooltip.afterlight.echo.identity").getAsString());
+        assertEquals("BOUND OWNER // %s", language.get("tooltip.afterlight.echo.owner").getAsString());
+        assertEquals("GENERATION // %s", language.get("tooltip.afterlight.echo.generation").getAsString());
+        assertEquals("SIGNAL SUPERSEDED", language.get("tooltip.afterlight.echo.superseded").getAsString());
     }
 
     @Test
@@ -288,6 +352,17 @@ class EchoRuntimeContractTest {
 
     private static String normalizedClassName(Path root, Path classFile) {
         return root.relativize(classFile).toString().replace('\\', '/');
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Component> components(Object value) {
+        return (List<Component>) value;
+    }
+
+    private static ServerPlayer uninitializedServerPlayer() throws Exception {
+        Field unsafeField = Unsafe.class.getDeclaredField("theUnsafe");
+        unsafeField.setAccessible(true);
+        return (ServerPlayer) ((Unsafe) unsafeField.get(null)).allocateInstance(ServerPlayer.class);
     }
 
     private static CommandSourceStack commandSource(int permissionLevel) {

@@ -11,6 +11,8 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalLong;
+import net.minecraft.network.chat.Component;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -312,6 +314,39 @@ class EchoScreenActionTest {
         assertEquals(0, gateway.mutationCount());
     }
 
+    @Test
+    void partialSnapshotReportsTheActualMissingQuestAndOpensRootArchive() throws Exception {
+        FakeGateway gateway = new FakeGateway(Map.of(QUEST_ID, completeSnapshot()));
+        EchoScreen screen = new EchoScreen(twoQuestRoute(), gateway);
+
+        EchoScreenModel model = model(screen);
+        assertEquals(Kind.SIGNAL_UNAVAILABLE, model.kind());
+        assertEquals(OptionalLong.of(OTHER_QUEST_ID), model.selectedQuestId());
+        assertEquals(
+                Component.translatable(
+                        "screen.afterlight.echo.diagnostic.signal_unavailable",
+                        EchoRoute.formatQuestId(OTHER_QUEST_ID)),
+                model.diagnostic());
+        assertTrue(screen.isActionEnabled(Action.ARCHIVE));
+
+        screen.activate(Action.ARCHIVE);
+
+        assertEquals(1, gateway.rootArchives);
+        assertEquals(List.of(), gateway.archives);
+    }
+
+    @Test
+    void malformedRouteKeepsRootArchiveAvailable() {
+        FakeGateway gateway = new FakeGateway(Map.of());
+        EchoScreen screen = EchoScreen.signalUnavailable(gateway);
+
+        assertTrue(screen.isActionEnabled(Action.ARCHIVE));
+        screen.activate(Action.ARCHIVE);
+
+        assertEquals(1, gateway.rootArchives);
+        assertEquals(0, gateway.mutationCount());
+    }
+
     private static EchoRoute route() {
         return new EchoRoute(1, QUEST_ID, List.of(new EchoRoute.Segment("root", List.of(), List.of(QUEST_ID))));
     }
@@ -429,14 +464,19 @@ class EchoScreenActionTest {
     }
 
     private static void assertUnavailable(EchoScreen screen) throws Exception {
-        Field modelField = EchoScreen.class.getDeclaredField("model");
-        modelField.setAccessible(true);
-        EchoScreenModel model = (EchoScreenModel) modelField.get(screen);
+        EchoScreenModel model = model(screen);
 
         assertEquals(Kind.SIGNAL_UNAVAILABLE, model.kind());
-        for (Action action : Action.values()) {
-            assertFalse(screen.isActionEnabled(action));
-        }
+        assertFalse(screen.isActionEnabled(Action.SUBMIT));
+        assertFalse(screen.isActionEnabled(Action.CLAIM));
+        assertFalse(screen.isActionEnabled(Action.PIN));
+        assertTrue(screen.isActionEnabled(Action.ARCHIVE));
+    }
+
+    private static EchoScreenModel model(EchoScreen screen) throws Exception {
+        Field modelField = EchoScreen.class.getDeclaredField("model");
+        modelField.setAccessible(true);
+        return (EchoScreenModel) modelField.get(screen);
     }
 
     private static int pendingMutationCount(EchoScreen screen) throws Exception {
@@ -461,6 +501,7 @@ class EchoScreenActionTest {
         private final List<Long> claims = new ArrayList<>();
         private final List<Long> pins = new ArrayList<>();
         private final List<Long> archives = new ArrayList<>();
+        private int rootArchives;
 
         private FakeGateway(Map<Long, EchoQuestSnapshot> snapshots) {
             this.snapshots = new LinkedHashMap<>(snapshots);
@@ -492,6 +533,10 @@ class EchoScreenActionTest {
         @Override
         public void openArchive(long questId) {
             archives.add(questId);
+        }
+
+        public void openArchive() {
+            rootArchives++;
         }
 
         private int mutationCount() {
