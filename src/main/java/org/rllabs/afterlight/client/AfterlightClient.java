@@ -3,7 +3,10 @@ package org.rllabs.afterlight.client;
 import java.io.IOException;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
+import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.config.ModConfig;
+import net.neoforged.neoforge.common.NeoForge;
 import org.rllabs.afterlight.Afterlight;
 import org.rllabs.afterlight.client.integration.FtbQuestGateway;
 import org.rllabs.afterlight.network.AfterlightPayloads;
@@ -14,7 +17,9 @@ import org.rllabs.afterlight.route.EchoRouteLoader.RouteValidationException;
 
 @Mod(value = Afterlight.MOD_ID, dist = Dist.CLIENT)
 public final class AfterlightClient {
-    public AfterlightClient() {
+    public AfterlightClient(ModContainer modContainer) {
+        modContainer.registerConfig(ModConfig.Type.CLIENT, SignalClientConfig.SPEC);
+        NeoForge.EVENT_BUS.addListener(SignalTitleScreenHook::onScreenOpening);
         AfterlightPayloads.installClientOpenHandler(AfterlightClient::openApprovedScreen);
     }
 
