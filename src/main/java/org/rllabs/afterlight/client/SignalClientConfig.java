@@ -18,6 +18,9 @@ public final class SignalClientConfig {
     }
 
     static boolean titleReplacementEnabled() {
+        if (!SPEC.isLoaded()) {
+            return REPLACE_TITLE_SCREEN.getDefault();
+        }
         try {
             return REPLACE_TITLE_SCREEN.get();
         } catch (RuntimeException exception) {

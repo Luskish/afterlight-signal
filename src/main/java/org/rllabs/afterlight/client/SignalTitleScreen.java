@@ -1,15 +1,18 @@
 package org.rllabs.afterlight.client;
 
-import java.util.Arrays;
-import java.util.List;
+import com.mojang.authlib.minecraft.BanDetails;
+import javax.annotation.Nullable;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Options;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.gui.screens.multiplayer.JoinMultiplayerScreen;
 import net.minecraft.client.gui.screens.multiplayer.SafetyScreen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
+import net.minecraft.client.sounds.SoundManager;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.Mth;
@@ -25,25 +28,29 @@ public final class SignalTitleScreen extends Screen {
     private static final int SIGNAL_CYAN = 0xFF4FE6F2;
     private static final int RELIQUARY_AMBER = 0xFFD09B4D;
     private static final int PALE_SIGNAL = 0xFFC7D3D4;
+    private final ClientAccess client;
 
     SignalTitleScreen() {
-        super(Component.literal("AFTERLIGHT // SIGNAL RELIQUARY"));
+        this(new MinecraftClientAccess());
     }
 
-    static List<String> menuLabels() {
-        return Arrays.stream(Destination.values()).map(Destination::label).toList();
+    SignalTitleScreen(ClientAccess client) {
+        super(Component.literal("AFTERLIGHT // SIGNAL RELIQUARY"));
+        this.client = client;
     }
 
     @Override
     protected void init() {
         MenuGeometry geometry = menuGeometry();
+        Component multiplayerDisabledReason = multiplayerDisabledReason();
         int y = geometry.y();
         for (Destination destination : Destination.values()) {
             Button button = Button.builder(Component.literal(destination.label()), ignored -> open(destination))
                     .bounds(geometry.x(), y, geometry.width(), geometry.buttonHeight())
                     .build(SignalButton::new);
             if (destination == Destination.JOIN_EXPEDITION) {
-                button.active = this.minecraft.allowsMultiplayer();
+                button.active = multiplayerDisabledReason == null;
+                button.setTooltip(multiplayerDisabledReason == null ? null : Tooltip.create(multiplayerDisabledReason));
             }
             this.addRenderableWidget(button);
             y += geometry.buttonHeight() + geometry.gap();
@@ -52,14 +59,31 @@ public final class SignalTitleScreen extends Screen {
 
     private void open(Destination destination) {
         switch (destination) {
-            case SOLO_EXPEDITION -> this.minecraft.setScreen(new SelectWorldScreen(this));
-            case JOIN_EXPEDITION -> this.minecraft.setScreen(this.minecraft.options.skipMultiplayerWarning
+            case SOLO_EXPEDITION -> this.client.setScreen(new SelectWorldScreen(this));
+            case JOIN_EXPEDITION -> this.client.setScreen(this.client.skipMultiplayerWarning()
                     ? new JoinMultiplayerScreen(this)
                     : new SafetyScreen(this));
-            case CONFIGURATION -> this.minecraft.setScreen(new OptionsScreen(this, this.minecraft.options));
-            case MODS -> this.minecraft.setScreen(new ModListScreen(this));
-            case DISCONNECT -> this.minecraft.stop();
+            case CONFIGURATION -> this.client.setScreen(new OptionsScreen(this, this.client.options()));
+            case MODS -> this.client.setScreen(new ModListScreen(this));
+            case DISCONNECT -> this.client.stop();
         }
+    }
+
+    @Nullable
+    private Component multiplayerDisabledReason() {
+        if (this.client.allowsMultiplayer()) {
+            return null;
+        }
+        if (this.client.isNameBanned()) {
+            return Component.translatable("title.multiplayer.disabled.banned.name");
+        }
+        BanDetails banDetails = this.client.multiplayerBan();
+        if (banDetails == null) {
+            return Component.translatable("title.multiplayer.disabled");
+        }
+        return Component.translatable(banDetails.expires() == null
+                ? "title.multiplayer.disabled.banned.permanent"
+                : "title.multiplayer.disabled.banned.temporary");
     }
 
     @Override
@@ -70,7 +94,23 @@ public final class SignalTitleScreen extends Screen {
     }
 
     private void renderCoverBackground(GuiGraphics graphics) {
-        double viewportAspect = this.height == 0 ? 1.0 : (double) this.width / this.height;
+        CoverCrop crop = coverCrop(this.width, this.height);
+        graphics.blit(
+                BACKGROUND,
+                0,
+                0,
+                this.width,
+                this.height,
+                crop.sourceX(),
+                crop.sourceY(),
+                crop.sourceWidth(),
+                crop.sourceHeight(),
+                BACKGROUND_WIDTH,
+                BACKGROUND_HEIGHT);
+    }
+
+    static CoverCrop coverCrop(int viewportWidth, int viewportHeight) {
+        double viewportAspect = viewportHeight == 0 ? 1.0 : (double) viewportWidth / viewportHeight;
         double textureAspect = (double) BACKGROUND_WIDTH / BACKGROUND_HEIGHT;
         int sourceX = 0;
         int sourceY = 0;
@@ -83,18 +123,7 @@ public final class SignalTitleScreen extends Screen {
             sourceWidth = Mth.clamp((int) Math.round(BACKGROUND_HEIGHT * viewportAspect), 1, BACKGROUND_WIDTH);
             sourceX = (BACKGROUND_WIDTH - sourceWidth) / 2;
         }
-        graphics.blit(
-                BACKGROUND,
-                0,
-                0,
-                this.width,
-                this.height,
-                sourceX,
-                sourceY,
-                sourceWidth,
-                sourceHeight,
-                BACKGROUND_WIDTH,
-                BACKGROUND_HEIGHT);
+        return new CoverCrop(sourceX, sourceY, sourceWidth, sourceHeight);
     }
 
     private void renderReliquaryFrame(GuiGraphics graphics) {
@@ -117,14 +146,18 @@ public final class SignalTitleScreen extends Screen {
     }
 
     private MenuGeometry menuGeometry() {
-        int buttonHeight = this.height < 180 ? 18 : 20;
-        int gap = this.height < 180 ? 2 : 4;
-        int width = Mth.clamp(this.width / 3, 150, 210);
-        width = Math.min(width, Math.max(80, this.width - 32));
-        int x = Math.max(16, this.width - width - (this.width < 360 ? 10 : 28));
+        return menuGeometry(this.width, this.height);
+    }
+
+    static MenuGeometry menuGeometry(int viewportWidth, int viewportHeight) {
+        int buttonHeight = viewportHeight < 180 ? 18 : 20;
+        int gap = viewportHeight < 180 ? 2 : 4;
+        int width = Mth.clamp(viewportWidth / 3, 150, 210);
+        width = Math.min(width, Math.max(80, viewportWidth - 32));
+        int x = Math.max(16, viewportWidth - width - (viewportWidth < 360 ? 10 : 28));
         int totalHeight = Destination.values().length * buttonHeight + (Destination.values().length - 1) * gap;
-        int maximumY = Math.max(4, this.height - totalHeight - 10);
-        int y = Mth.clamp((this.height - totalHeight) / 2, 4, maximumY);
+        int maximumY = Math.max(4, viewportHeight - totalHeight - 10);
+        int y = Mth.clamp((viewportHeight - totalHeight) / 2, 4, maximumY);
         return new MenuGeometry(x, y, width, buttonHeight, gap, totalHeight);
     }
 
@@ -162,6 +195,12 @@ public final class SignalTitleScreen extends Screen {
         }
     }
 
+    private record CoverCrop(int sourceX, int sourceY, int sourceWidth, int sourceHeight) {
+    }
+
+    private record ButtonDecoration(int border, boolean amberRail) {
+    }
+
     private static final class SignalButton extends Button {
         private SignalButton(Builder builder) {
             super(builder);
@@ -169,19 +208,91 @@ public final class SignalTitleScreen extends Screen {
 
         @Override
         protected void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
-            int border = this.isHoveredOrFocused() ? SIGNAL_CYAN : OXIDIZED_METAL;
+            ButtonDecoration decoration = decoration();
             int foreground = this.active ? PALE_SIGNAL : 0xFF6D787B;
-            graphics.fill(this.getX(), this.getY(), this.getX() + this.getWidth(), this.getY() + this.getHeight(), border);
+            graphics.fill(
+                    this.getX(),
+                    this.getY(),
+                    this.getX() + this.getWidth(),
+                    this.getY() + this.getHeight(),
+                    decoration.border());
             graphics.fill(
                     this.getX() + 1,
                     this.getY() + 1,
                     this.getX() + this.getWidth() - 1,
                     this.getY() + this.getHeight() - 1,
                     CARBON_BLACK);
-            if (this.isHoveredOrFocused()) {
+            if (decoration.amberRail()) {
                 graphics.fill(this.getX() + 3, this.getY() + 3, this.getX() + 5, this.getY() + this.getHeight() - 3, RELIQUARY_AMBER);
             }
             this.renderString(graphics, Minecraft.getInstance().font, foreground);
+        }
+
+        private ButtonDecoration decoration() {
+            boolean activeHighlight = this.active && this.isHoveredOrFocused();
+            return new ButtonDecoration(activeHighlight ? SIGNAL_CYAN : OXIDIZED_METAL, activeHighlight);
+        }
+
+        @Override
+        public void playDownSound(@Nullable SoundManager soundManager) {
+            if (soundManager != null) {
+                super.playDownSound(soundManager);
+            }
+        }
+    }
+
+    interface ClientAccess {
+        boolean allowsMultiplayer();
+
+        boolean isNameBanned();
+
+        @Nullable
+        BanDetails multiplayerBan();
+
+        boolean skipMultiplayerWarning();
+
+        Options options();
+
+        void setScreen(Screen screen);
+
+        void stop();
+    }
+
+    private static final class MinecraftClientAccess implements ClientAccess {
+        @Override
+        public boolean allowsMultiplayer() {
+            return Minecraft.getInstance().allowsMultiplayer();
+        }
+
+        @Override
+        public boolean isNameBanned() {
+            return Minecraft.getInstance().isNameBanned();
+        }
+
+        @Override
+        @Nullable
+        public BanDetails multiplayerBan() {
+            return Minecraft.getInstance().multiplayerBan();
+        }
+
+        @Override
+        public boolean skipMultiplayerWarning() {
+            return Minecraft.getInstance().options.skipMultiplayerWarning;
+        }
+
+        @Override
+        public Options options() {
+            return Minecraft.getInstance().options;
+        }
+
+        @Override
+        public void setScreen(Screen screen) {
+            Minecraft.getInstance().setScreen(screen);
+        }
+
+        @Override
+        public void stop() {
+            Minecraft.getInstance().stop();
         }
     }
 }
