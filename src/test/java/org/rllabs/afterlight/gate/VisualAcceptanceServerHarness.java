@@ -127,7 +127,8 @@ public final class VisualAcceptanceServerHarness {
 
     private static void prepareItemViews(ServerLevel level) {
         ItemStack echo = new ItemStack(EchoContent.ECHO.get());
-        ItemEntity dropped = new ItemEntity(level, 72.5, 102.2, 0.5, echo.copy());
+        ItemEntity dropped =
+                new ItemEntity(level, 72.5, 102.2, 0.5, echo.copy(), 0.0, 0.0, 0.0);
         dropped.setNoGravity(true);
         level.addFreshEntity(dropped);
 
