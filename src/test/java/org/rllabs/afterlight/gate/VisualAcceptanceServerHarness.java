@@ -13,7 +13,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.decoration.ItemFrame;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -49,7 +48,6 @@ public final class VisualAcceptanceServerHarness {
             return;
         }
         player.server.getPlayerList().op(player.getGameProfile());
-        player.setGameMode(GameType.CREATIVE);
         if (!prepared) {
             prepareScenes(player.serverLevel());
             ServerLevel farRelay = player.server.getLevel(FarRelayKeys.LEVEL);
