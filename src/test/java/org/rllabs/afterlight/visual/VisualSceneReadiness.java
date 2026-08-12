@@ -31,6 +31,9 @@ public final class VisualSceneReadiness {
                 .allMatch(anchor -> Boolean.TRUE.equals(observed.anchors().get(anchor)))) {
             failures.add(Failure.ANCHORS);
         }
+        if (!observed.rendererReady()) {
+            failures.add(Failure.RENDERER);
+        }
         if (expected.gateState() != null
                 && !expected.gateState().equals(observed.gateState())) {
             failures.add(Failure.GATE_STATE);
@@ -43,6 +46,7 @@ public final class VisualSceneReadiness {
         COORDINATES,
         CHUNKS,
         ANCHORS,
+        RENDERER,
         GATE_STATE
     }
 
@@ -72,6 +76,7 @@ public final class VisualSceneReadiness {
             double z,
             Map<String, Boolean> chunks,
             Map<String, Boolean> anchors,
+            boolean rendererReady,
             String gateState) {
         public ObservedScene {
             Objects.requireNonNull(dimension, "dimension");

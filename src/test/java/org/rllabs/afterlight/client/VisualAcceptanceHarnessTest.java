@@ -81,4 +81,25 @@ class VisualAcceptanceHarnessTest {
             assertFalse(scene.requiredChunks().isEmpty(), scene.artifact());
         });
     }
+
+    @Test
+    void worldSceneReadinessUsesCompiledRendererSectionsAndRecordsTheResult() throws Exception {
+        Path root = Path.of(System.getProperty("afterlight.source.root", "."))
+                .toAbsolutePath()
+                .normalize();
+        String probe = Files.readString(root.resolve(
+                "src/test/java/org/rllabs/afterlight/client/VisualSceneProbe.java"));
+        String harness = Files.readString(root.resolve(
+                "src/test/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java"));
+
+        assertTrue(
+                probe.contains("minecraft.levelRenderer.hasRenderedAllSections()"),
+                "scene readiness ignores the renderer compile queue");
+        assertTrue(
+                probe.contains("minecraft.levelRenderer.isSectionCompiled("),
+                "scene readiness ignores anchor render-section compilation");
+        assertTrue(
+                harness.contains("sceneJson.addProperty(\"renderer_ready\", scene.rendererReady())"),
+                "visual manifest omits renderer readiness evidence");
+    }
 }

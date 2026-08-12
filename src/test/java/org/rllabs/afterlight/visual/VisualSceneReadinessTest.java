@@ -30,10 +30,11 @@ class VisualSceneReadinessTest {
             15.5,
             Map.of("0,0", true, "1,0", true),
             Map.of("arrival_floor", true, "return_terminal", true, "loot_chest", true),
+            true,
             "OPEN");
 
     @Test
-    void exactDimensionCoordinatesChunksAnchorsAndGateStateAreRequired() {
+    void exactDimensionCoordinatesChunksAnchorsRendererAndGateStateAreRequired() {
         Evaluation evaluation = VisualSceneReadiness.evaluate(EXPECTED, READY);
 
         assertTrue(evaluation.ready());
@@ -47,6 +48,7 @@ class VisualSceneReadinessTest {
                         15.5,
                         READY.chunks(),
                         READY.anchors(),
+                        true,
                         "OPEN"),
                 Failure.DIMENSION);
         assertFailure(
@@ -57,6 +59,7 @@ class VisualSceneReadinessTest {
                         15.5,
                         READY.chunks(),
                         READY.anchors(),
+                        true,
                         "OPEN"),
                 Failure.COORDINATES);
         assertFailure(
@@ -67,6 +70,7 @@ class VisualSceneReadinessTest {
                         15.5,
                         READY.chunks(),
                         READY.anchors(),
+                        true,
                         "OPEN"),
                 Failure.COORDINATES);
         assertFailure(
@@ -77,6 +81,7 @@ class VisualSceneReadinessTest {
                         15.5,
                         Map.of("0,0", true, "1,0", false),
                         READY.anchors(),
+                        true,
                         "OPEN"),
                 Failure.CHUNKS);
         assertFailure(
@@ -87,6 +92,7 @@ class VisualSceneReadinessTest {
                         15.5,
                         READY.chunks(),
                         Map.of("arrival_floor", true, "return_terminal", false, "loot_chest", true),
+                        true,
                         "OPEN"),
                 Failure.ANCHORS);
         assertFailure(
@@ -97,6 +103,18 @@ class VisualSceneReadinessTest {
                         15.5,
                         READY.chunks(),
                         READY.anchors(),
+                        false,
+                        "OPEN"),
+                Failure.RENDERER);
+        assertFailure(
+                new ObservedScene(
+                        READY.dimension(),
+                        15.5,
+                        82.0,
+                        15.5,
+                        READY.chunks(),
+                        READY.anchors(),
+                        true,
                         "FAULT"),
                 Failure.GATE_STATE);
     }
@@ -114,6 +132,7 @@ class VisualSceneReadinessTest {
                         15.5,
                         READY.chunks(),
                         READY.anchors(),
+                        true,
                         "OPEN"));
 
         assertFalse(stability.update(ready));

@@ -56,6 +56,9 @@ final class VisualSceneProbe {
                 .filter(state -> state != null)
                 .findFirst()
                 .orElse(null);
+        boolean rendererReady = minecraft.levelRenderer.hasRenderedAllSections()
+                && anchors.stream().allMatch(anchor -> minecraft.levelRenderer.isSectionCompiled(
+                        new BlockPos(anchor.x(), anchor.y(), anchor.z())));
         SceneSnapshot snapshot = new SceneSnapshot(
                 scene,
                 level.dimension().location().toString(),
@@ -65,6 +68,7 @@ final class VisualSceneProbe {
                 relayPlatformY,
                 chunks,
                 anchors,
+                rendererReady,
                 gateState,
                 null);
         return snapshot.withEvaluation(VisualSceneReadiness.evaluate(
@@ -97,6 +101,7 @@ final class VisualSceneProbe {
                 null,
                 chunks,
                 anchors,
+                false,
                 null,
                 null);
         return snapshot.withEvaluation(VisualSceneReadiness.evaluate(
@@ -337,6 +342,7 @@ final class VisualSceneProbe {
             Integer relayPlatformY,
             List<ChunkObservation> chunks,
             List<AnchorObservation> anchors,
+            boolean rendererReady,
             String gateState,
             Evaluation evaluation) {
         SceneSnapshot {
@@ -354,6 +360,7 @@ final class VisualSceneProbe {
                     relayPlatformY,
                     chunks,
                     anchors,
+                    rendererReady,
                     gateState,
                     updatedEvaluation);
         }
@@ -386,6 +393,7 @@ final class VisualSceneProbe {
                     z,
                     observedChunks,
                     observedAnchors,
+                    rendererReady,
                     gateState);
         }
     }

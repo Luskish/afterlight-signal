@@ -647,6 +647,7 @@ public final class VisualAcceptanceHarness {
             screenAnchor.addProperty("valid", capture.screenClass() != null);
             anchors.add(screenAnchor);
             sceneJson.add("anchors", anchors);
+            sceneJson.addProperty("renderer_ready", true);
             sceneJson.addProperty("ready", true);
         } else {
             VisualSceneProbe.SceneSnapshot scene = capture.scene();
@@ -691,6 +692,7 @@ public final class VisualAcceptanceHarness {
                 anchors.add(anchorJson);
             });
             sceneJson.add("anchors", anchors);
+            sceneJson.addProperty("renderer_ready", scene.rendererReady());
             sceneJson.addProperty("ready", scene.evaluation().ready());
             JsonArray failures = new JsonArray();
             scene.evaluation().failures().forEach(failure -> failures.add(failure.name()));
