@@ -275,6 +275,7 @@ public final class VisualAcceptanceHarness {
         addSceneAwait(planned, "echo-item-gui.png");
         planned.add(() -> minecraft.setScreen(new InventoryScreen(minecraft.player)));
         addScreenAwait(planned, 1920, 1080, InventoryScreen.class);
+        addSceneAwait(planned, "echo-item-gui.png");
         planned.add(() -> captureWorldScreen(
                 "echo-item-gui.png", InventoryScreen.class, CameraType.FIRST_PERSON));
 

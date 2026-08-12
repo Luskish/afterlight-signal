@@ -69,6 +69,29 @@ class VisualAcceptanceHarnessTest {
     }
 
     @Test
+    void inventoryCaptureReestablishesWorldReadinessAfterOpeningScreen() throws Exception {
+        Path source = Path.of(System.getProperty("afterlight.source.root", "."))
+                .toAbsolutePath()
+                .normalize()
+                .resolve("src/test/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java");
+        String harness = Files.readString(source);
+        String sceneAwait = "addSceneAwait(planned, \"echo-item-gui.png\");";
+        int initialScene = harness.indexOf(sceneAwait);
+        int openInventory = harness.indexOf(
+                "minecraft.setScreen(new InventoryScreen(minecraft.player))", initialScene);
+        int screenReady = harness.indexOf(
+                "addScreenAwait(planned, 1920, 1080, InventoryScreen.class)", openInventory);
+        int refreshedScene = harness.indexOf(sceneAwait, screenReady + 1);
+        int capture = harness.indexOf("captureWorldScreen(", screenReady);
+
+        assertTrue(initialScene >= 0, "missing initial world readiness before inventory opening");
+        assertTrue(openInventory > initialScene, "inventory opens before initial world readiness");
+        assertTrue(screenReady > openInventory, "inventory screen stability is not required");
+        assertTrue(refreshedScene > screenReady, "world readiness is not renewed after inventory opening");
+        assertTrue(capture > refreshedScene, "inventory capture precedes renewed world readiness");
+    }
+
+    @Test
     void everyWorldArtifactHasAnExactSceneContract() {
         assertEquals(
                 VisualAcceptanceHarness.expectedArtifacts().subList(7, 22),
