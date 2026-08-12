@@ -22,6 +22,7 @@ import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.Pose;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.Level;
@@ -30,7 +31,9 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.border.WorldBorder;
 import net.minecraft.world.level.portal.DimensionTransition;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -39,6 +42,7 @@ import net.neoforged.neoforge.gametest.GameTestHolder;
 import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 import org.rllabs.afterlight.Afterlight;
 import org.rllabs.afterlight.EchoContent;
+import org.rllabs.afterlight.gate.GateActivationService.ActivationCode;
 import org.rllabs.afterlight.gate.GateActivationService.ActivationDecision;
 import org.rllabs.afterlight.relay.FarRelayInitializer;
 import org.rllabs.afterlight.relay.FarRelayKeys;
@@ -439,6 +443,164 @@ public final class GateTravelGameTests {
         helper.succeed();
     }
 
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void openGateReturnLeavesEveryFieldAndCannotBounce(GameTestHelper helper) {
+        GateControllerBlockEntity controller = buildAndOpenGate(helper);
+        BlockPos returnTarget = helper.absolutePos(CONTROLLER).above();
+        BlockPos preparedFallback = returnTarget.offset(-4, 0, 0);
+        Map<BlockPos, BlockState> original = Map.of(
+                preparedFallback.below(), helper.getLevel().getBlockState(preparedFallback.below()),
+                preparedFallback, helper.getLevel().getBlockState(preparedFallback),
+                preparedFallback.above(), helper.getLevel().getBlockState(preparedFallback.above()));
+        prepareSafePosition(helper.getLevel(), preparedFallback);
+        ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        ServerLevel transit = helper.getLevel().getServer().getLevel(Level.NETHER);
+        helper.assertTrue(transit != null, "Nether transit level was unavailable");
+
+        try {
+            GateTravelService.TravelResult outbound = GateTravelService.INSTANCE.travelToFarRelay(
+                    player,
+                    helper.absolutePos(CONTROLLER),
+                    transit);
+            helper.assertValueEqual(
+                    GateTravelService.TravelResult.SUCCESS, outbound, "open Gate outbound result");
+            helper.assertValueEqual(transit, player.serverLevel(), "open Gate outbound level");
+            helper.assertTrue(
+                    player.getExistingData(EchoContent.GATE_RETURN_TARGET).isPresent(),
+                    "open Gate outbound did not store a return route");
+            helper.assertTrue(
+                    GateTravelService.INSTANCE.returnPlayer(player),
+                    "open Gate return route failed");
+
+            helper.assertValueEqual(helper.getLevel(), player.serverLevel(), "open Gate return level");
+            helper.assertValueEqual(GateState.OPEN, controller.state(), "Gate state after return");
+            helper.assertTrue(
+                    !helper.getLevel().getBlockState(player.blockPosition()).is(EchoContent.GATE_FIELD.get()),
+                    "return feet remained inside a Gate field");
+            helper.assertTrue(
+                    !helper.getLevel()
+                            .getBlockState(player.blockPosition().above())
+                            .is(EchoContent.GATE_FIELD.get()),
+                    "return head remained inside a Gate field");
+            helper.assertTrue(
+                    player.getExistingData(EchoContent.GATE_RETURN_TARGET).isEmpty(),
+                    "open Gate return retained a route");
+        } catch (RuntimeException | Error exception) {
+            controller.close();
+            restore(helper.getLevel(), original);
+            removePlayer(helper, player);
+            throw exception;
+        }
+
+        helper.runAfterDelay(21L, () -> {
+            try {
+                helper.assertValueEqual(
+                        helper.getLevel(), player.serverLevel(), "post-limiter return level");
+                helper.assertTrue(
+                        player.getExistingData(EchoContent.GATE_RETURN_TARGET).isEmpty(),
+                        "post-limiter return gained a route");
+            } finally {
+                controller.close();
+                restore(helper.getLevel(), original);
+                removePlayer(helper, player);
+            }
+            helper.succeed();
+        });
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            timeoutTicks = 1200,
+            batch = "afterlight_gate_world_border_inside")
+    public static void returnSafetyAcceptsWhollyInsideWorldBorderAabb(GameTestHelper helper) {
+        assertWorldBorderReturn(helper, 10_000, 1.0, BorderFixture.INSIDE);
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            timeoutTicks = 1200,
+            batch = "afterlight_gate_world_border_straddling")
+    public static void returnSafetyRejectsBorderStraddlingAabb(GameTestHelper helper) {
+        assertWorldBorderReturn(helper, 11_000, 0.5, BorderFixture.STRADDLING);
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            timeoutTicks = 1200,
+            batch = "afterlight_gate_world_border_outside")
+    public static void returnSafetyRejectsWhollyOutsideWorldBorderAabb(GameTestHelper helper) {
+        assertWorldBorderReturn(helper, 12_000, 0.1, BorderFixture.OUTSIDE);
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void returnSafetyHandlesMinimumAndMaximumBuildHeights(GameTestHelper helper) {
+        ServerLevel source = helper.getLevel();
+        ServerLevel transit = source.getServer().getLevel(Level.NETHER);
+        helper.assertTrue(transit != null, "Nether transit level was unavailable");
+        BlockPos minimum = new BlockPos(12_000, source.getMinBuildHeight(), 12_000);
+        BlockPos minimumFallback = minimum.above();
+        Map<BlockPos, BlockState> minimumOriginal = Map.of(
+                minimum, source.getBlockState(minimum),
+                minimumFallback, source.getBlockState(minimumFallback),
+                minimumFallback.above(), source.getBlockState(minimumFallback.above()));
+        prepareSafePosition(source, minimumFallback);
+        BlockPos maximum = new BlockPos(
+                13_000, source.getMaxBuildHeight() - 1, 13_000);
+        Map<BlockPos, BlockState> maximumOriginal = fillSearchVolume(source, maximum, Blocks.STONE);
+        ServerLevel overworld = source.getServer().overworld();
+        BlockPos sharedSpawn = overworld.getSharedSpawnPos();
+        Map<BlockPos, BlockState> spawnOriginal = Map.of(
+                sharedSpawn.below(), overworld.getBlockState(sharedSpawn.below()),
+                sharedSpawn, overworld.getBlockState(sharedSpawn),
+                sharedSpawn.above(), overworld.getBlockState(sharedSpawn.above()));
+        prepareSafePosition(overworld, sharedSpawn);
+        ServerPlayer minimumPlayer = helper.makeMockServerPlayerInLevel();
+        ServerPlayer maximumPlayer = helper.makeMockServerPlayerInLevel();
+        sendToTransit(helper, minimumPlayer, transit);
+        sendToTransit(helper, maximumPlayer, transit);
+
+        try {
+            helper.assertFalse(
+                    source.isInWorldBounds(minimum.below()),
+                    "minimum fixture floor remained in bounds");
+            minimumPlayer.setData(
+                    EchoContent.GATE_RETURN_TARGET,
+                    new GateReturnTarget(source.dimension(), minimum, 0.0F, 0.0F));
+            helper.assertTrue(
+                    GateTravelService.INSTANCE.returnPlayer(minimumPlayer),
+                    "minimum-height return failed");
+            helper.assertValueEqual(
+                    minimumFallback,
+                    minimumPlayer.blockPosition(),
+                    "minimum-height nearest fallback");
+            removePlayer(helper, minimumPlayer);
+
+            helper.assertFalse(
+                    source.isInWorldBounds(maximum.above()),
+                    "maximum fixture head remained in bounds");
+            maximumPlayer.setData(
+                    EchoContent.GATE_RETURN_TARGET,
+                    new GateReturnTarget(source.dimension(), maximum, 0.0F, 0.0F));
+            helper.assertTrue(
+                    GateTravelService.INSTANCE.returnPlayer(maximumPlayer),
+                    "maximum-height fallback return failed");
+            helper.assertValueEqual(
+                    sharedSpawn,
+                    maximumPlayer.blockPosition(),
+                    "maximum-height fully rejected search fallback");
+        } finally {
+            restore(source, minimumOriginal);
+            restore(source, maximumOriginal);
+            restore(overworld, spawnOriginal);
+            removePlayer(helper, minimumPlayer);
+            removePlayer(helper, maximumPlayer);
+        }
+        helper.succeed();
+    }
+
     @GameTest(
             templateNamespace = "minecraft",
             template = TEMPLATE,
@@ -660,6 +822,72 @@ public final class GateTravelGameTests {
         helper.succeed();
     }
 
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void liveOpenOwnerAuthorizesExactFieldCollision(GameTestHelper helper) {
+        GateControllerBlockEntity controller = buildAndOpenGate(helper);
+        BlockPos field = new GateLocalPos(0, 4).toWorld(CONTROLLER, Direction.NORTH);
+        BlockPos absoluteField = helper.absolutePos(field);
+        ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        player.moveTo(absoluteField.getBottomCenter(), 0.0F, 0.0F);
+
+        try {
+            helper.getBlockState(field)
+                    .entityInside(helper.getLevel(), absoluteField, player);
+
+            GateTravelService.TravelResult probe = GateTravelService.INSTANCE.travelToFarRelay(
+                    player,
+                    helper.absolutePos(CONTROLLER),
+                    helper.getLevel());
+            helper.assertValueEqual(
+                    GateTravelService.TravelResult.RATE_LIMITED,
+                    probe,
+                    "live field collision authorization probe");
+            helper.assertBlockPresent(EchoContent.GATE_FIELD.get(), field);
+        } finally {
+            player.removeData(EchoContent.GATE_RETURN_TARGET);
+            controller.close();
+            removePlayer(helper, player);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 1200)
+    public static void expiredOpenOwnerRejectsCollisionBeforeControllerTick(GameTestHelper helper) {
+        GateControllerBlockEntity controller = buildGate(helper);
+        ActivationDecision expired = new ActivationDecision(
+                ActivationCode.OPENED, helper.getLevel().getGameTime());
+        helper.assertTrue(controller.applyActivation(expired), "expired fixture opening was not applied");
+        BlockPos field = new GateLocalPos(0, 4).toWorld(CONTROLLER, Direction.NORTH);
+        BlockPos absoluteField = helper.absolutePos(field);
+        ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        player.moveTo(absoluteField.getBottomCenter(), 0.0F, 0.0F);
+
+        try {
+            helper.getBlockState(field)
+                    .entityInside(helper.getLevel(), absoluteField, player);
+
+            helper.assertValueEqual(
+                    helper.getLevel(), player.serverLevel(), "expired field collision level");
+            helper.assertTrue(
+                    player.getExistingData(EchoContent.GATE_RETURN_TARGET).isEmpty(),
+                    "expired field collision stored a return route");
+            GateTravelService.TravelResult probe = GateTravelService.INSTANCE.travelToFarRelay(
+                    player,
+                    helper.absolutePos(CONTROLLER),
+                    helper.getLevel());
+            helper.assertValueEqual(
+                    GateTravelService.TravelResult.SUCCESS,
+                    probe,
+                    "expired field collision authorization probe");
+            helper.assertBlockNotPresent(EchoContent.GATE_FIELD.get(), field);
+        } finally {
+            player.removeData(EchoContent.GATE_RETURN_TARGET);
+            controller.close();
+            removePlayer(helper, player);
+        }
+        helper.succeed();
+    }
+
     private static GateControllerBlockEntity buildGate(GameTestHelper helper) {
         for (var entry : GatePattern.expected(net.minecraft.core.Direction.NORTH).entrySet()) {
             BlockPos position = entry.getKey().toWorld(CONTROLLER, net.minecraft.core.Direction.NORTH);
@@ -671,6 +899,26 @@ public final class GateTravelGameTests {
             helper.setBlock(position, block);
         }
         return helper.getBlockEntity(CONTROLLER);
+    }
+
+    private static GateControllerBlockEntity buildAndOpenGate(GameTestHelper helper) {
+        GateControllerBlockEntity controller = buildGate(helper);
+        helper.assertTrue(
+                controller.applyActivation(successfulDecision(helper)),
+                "accepted opening was not applied");
+        return controller;
+    }
+
+    private static ActivationDecision successfulDecision(GameTestHelper helper) {
+        return new GateActivationService().activate(
+                new GateActivationService.ActivationRequest(
+                        new GatePatternMatcher.MatchResult(java.util.List.of()),
+                        1,
+                        true,
+                        GateState.IDLE,
+                        helper.getLevel().getGameTime()),
+                null,
+                (ignoredPlayer, ignoredTask) -> true);
     }
 
     private static void reduceCentralToPreV2(ServerLevel level, int floorY) {
@@ -766,6 +1014,9 @@ public final class GateTravelGameTests {
                         deltaY <= GateTravelService.VERTICAL_RANGE + 1;
                         deltaY++) {
                     BlockPos position = center.offset(deltaX, deltaY, deltaZ);
+                    if (!level.isInWorldBounds(position)) {
+                        continue;
+                    }
                     original.put(position, level.getBlockState(position));
                     level.setBlock(
                             position,
@@ -775,6 +1026,105 @@ public final class GateTravelGameTests {
             }
         }
         return Map.copyOf(original);
+    }
+
+    private static void sendToTransit(
+            GameTestHelper helper,
+            ServerPlayer player,
+            ServerLevel transit) {
+        GateTravelService.TravelResult result = GateTravelService.INSTANCE.travelToFarRelay(
+                player, helper.absolutePos(CONTROLLER), transit);
+        helper.assertValueEqual(GateTravelService.TravelResult.SUCCESS, result, "transit setup result");
+        helper.assertValueEqual(transit, player.serverLevel(), "transit setup level");
+    }
+
+    private static AABB standingBounds(ServerPlayer player, BlockPos position) {
+        return player.getDimensions(Pose.STANDING)
+                .makeBoundingBox(Vec3.ZERO)
+                .move(position.getBottomCenter());
+    }
+
+    private static void assertWorldBorderReturn(
+            GameTestHelper helper,
+            int coordinate,
+            double borderMaxOffset,
+            BorderFixture fixture) {
+        ServerLevel source = helper.getLevel();
+        ServerLevel transit = source.getServer().getLevel(Level.NETHER);
+        helper.assertTrue(transit != null, "Nether transit level was unavailable");
+        BlockPos exact = new BlockPos(
+                coordinate,
+                helper.absolutePos(CONTROLLER).getY() + 2,
+                coordinate);
+        BlockPos fallback = exact.west();
+        Map<BlockPos, BlockState> original = fillSearchVolume(source, exact, Blocks.STONE);
+        prepareSafePosition(source, exact);
+        prepareSafePosition(source, fallback);
+        WorldBorder border = source.getWorldBorder();
+        WorldBorder.Settings originalBorder = border.createSettings();
+        ServerPlayer player = helper.makeMockServerPlayerInLevel();
+        sendToTransit(helper, player, transit);
+
+        try {
+            setBorderMaxX(border, exact, exact.getX() + borderMaxOffset);
+            AABB exactBounds = standingBounds(player, exact);
+            if (fixture == BorderFixture.INSIDE) {
+                helper.assertTrue(
+                        border.isWithinBounds(exactBounds),
+                        "inside fixture crossed the border");
+            } else if (fixture == BorderFixture.STRADDLING) {
+                helper.assertTrue(
+                        exactBounds.minX < border.getMaxX()
+                                && exactBounds.maxX > border.getMaxX(),
+                        "straddling fixture did not cross the border edge");
+                helper.assertFalse(
+                        border.isWithinBounds(exactBounds),
+                        "straddling fixture was wholly inside");
+            } else {
+                helper.assertTrue(
+                        exactBounds.minX >= border.getMaxX(),
+                        "outside fixture still overlapped the border");
+                helper.assertFalse(
+                        border.isWithinBounds(exactBounds),
+                        "outside fixture was inside");
+            }
+            if (fixture != BorderFixture.INSIDE) {
+                helper.assertTrue(
+                        border.isWithinBounds(standingBounds(player, fallback)),
+                        "border fallback crossed the border");
+            }
+            player.setData(
+                    EchoContent.GATE_RETURN_TARGET,
+                    new GateReturnTarget(source.dimension(), exact, 0.0F, 0.0F));
+
+            helper.assertTrue(
+                    GateTravelService.INSTANCE.returnPlayer(player),
+                    "world-border return failed");
+            helper.assertValueEqual(
+                    fixture == BorderFixture.INSIDE ? exact : fallback,
+                    player.blockPosition(),
+                    "world-border return position");
+        } finally {
+            border.applySettings(originalBorder);
+            restore(source, original);
+            removePlayer(helper, player);
+        }
+        helper.succeed();
+    }
+
+    private static void setBorderMaxX(
+            WorldBorder border,
+            BlockPos position,
+            double maxX) {
+        double size = 32.0;
+        border.setSize(size);
+        border.setCenter(maxX - size / 2.0, position.getZ() + 0.5);
+    }
+
+    private enum BorderFixture {
+        INSIDE,
+        STRADDLING,
+        OUTSIDE
     }
 
     private static void restore(

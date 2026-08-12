@@ -199,6 +199,14 @@ public final class GateControllerBlockEntity extends BlockEntity {
         return false;
     }
 
+    boolean authorizesFieldTravel(
+            BlockPos position,
+            UUID candidateFieldId,
+            long gameTime) {
+        return ownsField(position, candidateFieldId)
+                && ACTIVATION_SERVICE.shouldResumeOpen(state, openDeadline, gameTime);
+    }
+
     static void serverTick(
             Level level,
             BlockPos position,
@@ -284,6 +292,8 @@ public final class GateControllerBlockEntity extends BlockEntity {
                 || !persistentStateValid
                 || orientation == null
                 || fieldId == null
+                || !isGateCore(coreStack)
+                || coreStack.getCount() != 1
                 || !getBlockState().is(EchoContent.GATE_CONTROLLER.get())
                 || facing(getBlockState()) != orientation) {
             return false;

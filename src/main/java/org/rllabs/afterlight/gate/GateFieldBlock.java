@@ -34,9 +34,7 @@ public final class GateFieldBlock extends Block implements EntityBlock {
         }
         BlockEntity blockEntity = serverLevel.getBlockEntity(position);
         if (blockEntity instanceof GateFieldBlockEntity field
-                && field.ownerPosition() != null
-                && field.ownerId() != null
-                && field.isOwnedBy(field.ownerPosition(), field.ownerId())) {
+                && field.authorizesTravel(serverLevel, position)) {
             GateTravelService.INSTANCE.travelToFarRelay(player, field.ownerPosition());
         }
     }

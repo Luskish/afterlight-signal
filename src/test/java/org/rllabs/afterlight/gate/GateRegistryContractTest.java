@@ -10,11 +10,13 @@ import com.google.gson.JsonParser;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.item.BlockItem;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
@@ -28,28 +30,48 @@ class GateRegistryContractTest {
             .normalize();
 
     @Test
-    void allSevenBlocksAndSixPlaceableItemsRegisterUnderExactIds() {
-        Map<ResourceLocation, Block> blocks = Map.of(
+    void afterlightNamespaceHasExactBlocksItemsAndPlaceableBindings() {
+        Map<ResourceLocation, Block> placeableBlocks = Map.of(
                 id("gate_frame"), EchoContent.GATE_FRAME.get(),
                 id("signal_glass"), EchoContent.SIGNAL_GLASS.get(),
                 id("gate_controller"), EchoContent.GATE_CONTROLLER.get(),
-                id("gate_field"), EchoContent.GATE_FIELD.get(),
                 id("relay_stone"), EchoContent.RELAY_STONE.get(),
                 id("return_terminal"), EchoContent.RETURN_TERMINAL.get(),
                 id("future_console"), EchoContent.FUTURE_CONSOLE.get());
+        Set<ResourceLocation> expectedBlocks = Set.of(
+                id("gate_frame"),
+                id("signal_glass"),
+                id("gate_controller"),
+                id("gate_field"),
+                id("relay_stone"),
+                id("return_terminal"),
+                id("future_console"));
+        Set<ResourceLocation> expectedItems = Set.of(
+                id("echo"),
+                id("gate_frame"),
+                id("signal_glass"),
+                id("gate_controller"),
+                id("relay_stone"),
+                id("return_terminal"),
+                id("future_console"));
 
-        blocks.forEach((blockId, block) -> {
+        Set<ResourceLocation> actualBlocks = BuiltInRegistries.BLOCK.keySet().stream()
+                .filter(blockId -> blockId.getNamespace().equals("afterlight"))
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        Set<ResourceLocation> actualItems = BuiltInRegistries.ITEM.keySet().stream()
+                .filter(itemId -> itemId.getNamespace().equals("afterlight"))
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+
+        assertEquals(expectedBlocks, actualBlocks);
+        assertEquals(expectedItems, actualItems);
+        placeableBlocks.forEach((blockId, block) -> {
             assertSame(block, BuiltInRegistries.BLOCK.get(blockId));
             assertEquals(blockId, BuiltInRegistries.BLOCK.getKey(block));
+            Item item = BuiltInRegistries.ITEM.get(blockId);
+            assertTrue(item instanceof BlockItem, blockId.toString());
+            assertSame(block, ((BlockItem) item).getBlock(), blockId.toString());
         });
-        List.of(
-                        "gate_frame",
-                        "signal_glass",
-                        "gate_controller",
-                        "relay_stone",
-                        "return_terminal",
-                        "future_console")
-                .forEach(path -> assertTrue(BuiltInRegistries.ITEM.getOptional(id(path)).isPresent(), path));
+
         assertTrue(BuiltInRegistries.ITEM.getOptional(id("gate_field")).isEmpty());
         assertSame(
                 EchoContent.GATE_CONTROLLER_BLOCK_ENTITY.get(),

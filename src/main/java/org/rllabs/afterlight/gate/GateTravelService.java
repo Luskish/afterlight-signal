@@ -247,17 +247,21 @@ public final class GateTravelService {
             return false;
         }
         BlockState floorState = level.getBlockState(floor);
+        BlockState feetState = level.getBlockState(position);
+        BlockState headState = level.getBlockState(head);
         if (!floorState.isFaceSturdy(level, floor, Direction.UP)
-                || !level.getBlockState(position)
-                        .getCollisionShape(level, position)
-                        .isEmpty()
-                || !level.getBlockState(head).getCollisionShape(level, head).isEmpty()) {
+                || feetState.is(EchoContent.GATE_FIELD.get())
+                || headState.is(EchoContent.GATE_FIELD.get())
+                || !feetState.getCollisionShape(level, position).isEmpty()
+                || !headState.getCollisionShape(level, head).isEmpty()) {
             return false;
         }
         AABB bounds = player.getDimensions(Pose.STANDING)
                 .makeBoundingBox(Vec3.ZERO)
                 .move(position.getBottomCenter());
-        return level.noCollision(player, bounds) && !level.containsAnyLiquid(bounds);
+        return level.getWorldBorder().isWithinBounds(bounds)
+                && level.noCollision(player, bounds)
+                && !level.containsAnyLiquid(bounds);
     }
 
     private static void grantAdvancement(ServerPlayer player, ResourceLocation id) {

@@ -45,8 +45,8 @@ public final class GateControllerGameTests {
 
     private GateControllerGameTests() {}
 
-    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 240)
-    public static void futureSavedOpeningClosesAtOriginalDeadline(GameTestHelper helper) {
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 40)
+    public static void futureSavedOpeningWithoutCoreFaultsOnLoad(GameTestHelper helper) {
         GateControllerBlockEntity controller = buildGate(helper);
         ActivationDecision decision = successfulDecision(helper);
         helper.assertTrue(controller.applyActivation(decision), "accepted opening was not applied");
@@ -54,21 +54,13 @@ public final class GateControllerGameTests {
 
         CompoundTag saved = controller.saveWithFullMetadata(helper.getLevel().registryAccess());
         GateControllerBlockEntity reloaded = reloadController(helper, saved);
-        helper.assertValueEqual(GateState.OPEN, reloaded.state(), "reloaded state");
-        helper.assertValueEqual(FACING, reloaded.orientation(), "reloaded orientation");
-        helper.assertValueEqual(decision.openDeadline(), reloaded.openDeadline(), "reloaded deadline");
-        helper.assertValueEqual(controller.fieldId(), reloaded.fieldId(), "reloaded field UUID");
 
-        long ticksUntilClose = decision.openDeadline() - helper.getLevel().getGameTime();
-        helper.runAfterDelay(ticksUntilClose - 1L, () -> {
-            helper.assertValueEqual(GateState.OPEN, reloaded.state(), "state before original deadline");
-            assertAllFieldsPresent(helper);
-        });
-        helper.runAfterDelay(ticksUntilClose, () -> {
-            helper.assertValueEqual(GateState.IDLE, reloaded.state(), "state at original deadline");
-            assertAllFieldsAbsent(helper);
-            helper.succeed();
-        });
+        helper.assertValueEqual(GateState.FAULT, reloaded.state(), "missing-core reload state");
+        helper.assertValueEqual(0L, reloaded.openDeadline(), "missing-core reload deadline");
+        helper.assertTrue(reloaded.fieldId() == null, "missing-core reload retained a field UUID");
+        helper.assertTrue(reloaded.coreStack().isEmpty(), "missing-core reload gained an item");
+        assertAllFieldsAbsent(helper);
+        helper.succeed();
     }
 
     @GameTest(
@@ -100,7 +92,8 @@ public final class GateControllerGameTests {
             template = TEMPLATE,
             timeoutTicks = 240,
             batch = "afterlight_gate_cross_chunk_deadline")
-    public static void futureCrossChunkReloadClosesAtOriginalDeadline(GameTestHelper helper) {
+    public static void futureCrossChunkReloadFaultsWhenMissingCoreBecomesAvailable(
+            GameTestHelper helper) {
         CrossChunkReloadFixture fixture = prepareCrossChunkReload(helper, 24);
         GateControllerBlockEntity reloaded = loadControllerChunk(helper, fixture);
         helper.assertValueEqual(reloaded.state(), GateState.OPEN, "cross-chunk reloaded state");
@@ -120,20 +113,11 @@ public final class GateControllerGameTests {
         restoreGateChunk(helper, fixture, fixture.deferredChunk());
         assertAllFieldsOwnedAtAbsolutePosition(helper, fixture.absoluteController(), reloaded);
 
-        long ticksUntilClose = fixture.decision().openDeadline()
-                - helper.getLevel().getGameTime();
-        helper.runAfterDelay(ticksUntilClose - 1L, () -> {
+        helper.runAfterDelay(2L, () -> {
             helper.assertValueEqual(
                     reloaded.state(),
-                    GateState.OPEN,
-                    "cross-chunk state before deadline");
-            assertAllFieldsPresentAtAbsolutePosition(helper, fixture.absoluteController());
-        });
-        helper.runAfterDelay(ticksUntilClose, () -> {
-            helper.assertValueEqual(
-                    reloaded.state(),
-                    GateState.IDLE,
-                    "cross-chunk state at deadline");
+                    GateState.FAULT,
+                    "cross-chunk missing-core recovery state");
             assertAllFieldsAbsentAtAbsolutePosition(helper, fixture.absoluteController());
             releaseControllerChunk(helper, fixture);
             helper.getLevel().setChunkForced(
@@ -295,6 +279,29 @@ public final class GateControllerGameTests {
     }
 
     @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 40)
+    public static void unexpectedSavedOpenItemFaultsAndRemainsRecoverable(GameTestHelper helper) {
+        GateControllerBlockEntity controller = buildGate(helper);
+        ItemStack unexpected = new ItemStack(Items.DIAMOND);
+        helper.assertTrue(controller.insertCore(unexpected), "unexpected item was not stored");
+        helper.assertTrue(
+                controller.applyActivation(successfulDecision(helper)),
+                "unexpected-item fixture opening was not applied");
+        CompoundTag saved = controller.saveWithFullMetadata(helper.getLevel().registryAccess());
+
+        GateControllerBlockEntity reloaded = reloadController(helper, saved);
+
+        helper.assertValueEqual(GateState.FAULT, reloaded.state(), "unexpected-item reload state");
+        helper.assertTrue(reloaded.coreStack().is(Items.DIAMOND), "unexpected item changed on reload");
+        helper.assertValueEqual(1, reloaded.coreStack().getCount(), "unexpected item count");
+        ItemStack recovered = reloaded.removeCore();
+        helper.assertTrue(recovered.is(Items.DIAMOND), "unexpected item was not recoverable");
+        helper.assertValueEqual(1, recovered.getCount(), "recovered unexpected item count");
+        helper.assertTrue(reloaded.coreStack().isEmpty(), "recovered item remained stored");
+        assertAllFieldsAbsent(helper);
+        helper.succeed();
+    }
+
+    @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 40)
     public static void savedFieldReloadsWithControllerPositionAndUuid(GameTestHelper helper) {
         GateControllerBlockEntity controller = buildAndOpenGate(helper);
         BlockPos relativePosition = fieldPosition();
@@ -352,6 +359,81 @@ public final class GateControllerGameTests {
                     helper.getLevel().getChunkSource().getChunkNow(farOwnerChunk.x, farOwnerChunk.z) == null,
                     "field recovery loaded the implausible owner chunk");
             helper.assertBlockNotPresent(EchoContent.GATE_FIELD.get(), relativePosition);
+            helper.succeed();
+        });
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            timeoutTicks = 1600,
+            batch = "afterlight_gate_cross_chunk_expired_collision")
+    public static void expiredCrossChunkReloadDeniesTravelBeforeFieldTick(GameTestHelper helper) {
+        CrossChunkReloadFixture fixture = prepareCrossChunkReload(helper, 40);
+        BlockPos staleField = new GateLocalPos(2, 4)
+                .toWorld(fixture.absoluteController(), FACING);
+        helper.assertValueEqual(
+                fixture.deferredChunk(), new ChunkPos(staleField), "stale field chunk");
+        long delay = fixture.decision().openDeadline()
+                - helper.getLevel().getGameTime()
+                + 1L;
+
+        helper.runAfterDelay(delay, () -> {
+            helper.getLevel()
+                    .getChunkSource()
+                    .addRegionTicket(
+                            TicketType.PORTAL,
+                            fixture.deferredChunk(),
+                            0,
+                            staleField);
+            helper.getLevel().getChunk(
+                    fixture.deferredChunk().x,
+                    fixture.deferredChunk().z,
+                    ChunkStatus.FULL,
+                    true);
+            restoreGateChunk(helper, fixture, fixture.deferredChunk());
+            helper.assertTrue(
+                    !isFullChunkAvailable(helper, fixture.controllerChunk()),
+                    "stale field reload force-loaded its owner chunk");
+            ServerPlayer player = helper.makeMockServerPlayerInLevel();
+            player.moveTo(staleField.getBottomCenter(), 0.0F, 0.0F);
+
+            try {
+                helper.getLevel()
+                        .getBlockState(staleField)
+                        .entityInside(helper.getLevel(), staleField, player);
+
+                helper.assertValueEqual(
+                        helper.getLevel(), player.serverLevel(), "stale field collision level");
+                helper.assertTrue(
+                        player.getExistingData(EchoContent.GATE_RETURN_TARGET).isEmpty(),
+                        "stale field collision stored a return route");
+                GateTravelService.TravelResult probe = GateTravelService.INSTANCE.travelToFarRelay(
+                        player,
+                        fixture.absoluteController(),
+                        helper.getLevel());
+                helper.assertValueEqual(
+                        GateTravelService.TravelResult.SUCCESS,
+                        probe,
+                        "stale field collision authorization probe");
+                helper.assertTrue(
+                        !isFullChunkAvailable(helper, fixture.controllerChunk()),
+                        "stale field collision force-loaded its owner chunk");
+                helper.assertTrue(
+                        helper.getLevel().getBlockState(staleField).is(EchoContent.GATE_FIELD.get()),
+                        "stale field was removed while its owner chunk was unavailable");
+            } finally {
+                player.removeData(EchoContent.GATE_RETURN_TARGET);
+                helper.getLevel().getServer().getPlayerList().remove(player);
+                clearGateChunk(helper, fixture, fixture.deferredChunk());
+                helper.getLevel()
+                        .getChunkSource()
+                        .removeRegionTicket(
+                                TicketType.PORTAL,
+                                fixture.deferredChunk(),
+                                0,
+                                staleField);
+            }
             helper.succeed();
         });
     }
@@ -798,6 +880,21 @@ public final class GateControllerGameTests {
                     helper.getLevel().getBlockEntity(absolutePosition) == loaded,
                     "restored Gate block entity was not installed at " + absolutePosition.toShortString());
         });
+    }
+
+    private static void clearGateChunk(
+            GameTestHelper helper,
+            CrossChunkReloadFixture fixture,
+            ChunkPos chunk) {
+        fixture.savedBlocks().keySet().stream()
+                .filter(position -> new ChunkPos(position).equals(chunk))
+                .forEach(position -> {
+                    helper.getLevel().removeBlockEntity(position);
+                    helper.getLevel().setBlock(
+                            position,
+                            Blocks.AIR.defaultBlockState(),
+                            Block.UPDATE_ALL);
+                });
     }
 
     private static void releaseControllerChunk(

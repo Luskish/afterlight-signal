@@ -54,6 +54,28 @@ public final class GateFieldBlockEntity extends BlockEntity {
                 && linked;
     }
 
+    boolean authorizesTravel(ServerLevel level, BlockPos position) {
+        if (!linked) {
+            return false;
+        }
+        if (ownerPosition == null
+                || ownerId == null
+                || !isPlausibleOwner(position, ownerPosition)) {
+            removeField(level, position);
+            return false;
+        }
+        if (!isChunkLoaded(level, ownerPosition)) {
+            return false;
+        }
+        BlockEntity blockEntity = level.getBlockEntity(ownerPosition);
+        if (blockEntity instanceof GateControllerBlockEntity controller
+                && controller.authorizesFieldTravel(position, ownerId, level.getGameTime())) {
+            return true;
+        }
+        removeField(level, position);
+        return false;
+    }
+
     static void serverTick(
             Level level,
             BlockPos position,
@@ -62,25 +84,7 @@ public final class GateFieldBlockEntity extends BlockEntity {
         if (!(level instanceof ServerLevel serverLevel)) {
             return;
         }
-        if (!field.linked) {
-            return;
-        }
-        if (field.ownerPosition == null || field.ownerId == null) {
-            removeField(serverLevel, position);
-            return;
-        }
-        if (!isPlausibleOwner(position, field.ownerPosition)) {
-            removeField(serverLevel, position);
-            return;
-        }
-        if (!isChunkLoaded(serverLevel, field.ownerPosition)) {
-            return;
-        }
-        BlockEntity blockEntity = serverLevel.getBlockEntity(field.ownerPosition);
-        if (!(blockEntity instanceof GateControllerBlockEntity controller)
-                || !controller.ownsField(position, field.ownerId)) {
-            removeField(serverLevel, position);
-        }
+        field.authorizesTravel(serverLevel, position);
     }
 
     @Override
