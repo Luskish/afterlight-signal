@@ -109,6 +109,9 @@ public final class VisualAcceptanceServerHarness {
             throw new IllegalStateException("Visual Gate controller did not initialize");
         }
         if (state == GateState.OPEN) {
+            if (!controller.insertCore(VisualAcceptanceGateCore.stack())) {
+                throw new IllegalStateException("Visual Gate did not accept its core");
+            }
             boolean opened = controller.applyActivation(new ActivationDecision(
                     ActivationCode.OPENED, level.getGameTime() + 100_000L));
             if (!opened) {
