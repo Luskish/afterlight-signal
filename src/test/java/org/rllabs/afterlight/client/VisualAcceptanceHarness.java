@@ -14,6 +14,7 @@ import java.util.HexFormat;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.BooleanSupplier;
 import javax.imageio.ImageIO;
@@ -29,6 +30,7 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.client.event.RenderFrameEvent;
 import org.lwjgl.opengl.GL11;
 import org.rllabs.afterlight.Afterlight;
 import org.rllabs.afterlight.integration.EchoQuestGateway;
@@ -79,6 +81,7 @@ public final class VisualAcceptanceHarness {
     private final Path outputRoot;
     private final List<Step> steps;
     private final List<CapturedArtifact> captures = new ArrayList<>();
+    private final DeferredFrameCapture deferredFrameCapture = new DeferredFrameCapture();
     private int elapsedTicks;
     private int stepIndex;
     private BooleanSupplier condition;
@@ -115,6 +118,16 @@ public final class VisualAcceptanceHarness {
             instance = new VisualAcceptanceHarness(Minecraft.getInstance());
         }
         instance.tick();
+    }
+
+    @SubscribeEvent
+    public static void onRenderedFrame(RenderFrameEvent.Post event) {
+        if (!enabled(System.getProperty(ENABLE_PROPERTY))
+                || !"client".equals(System.getProperty(ROLE_PROPERTY))
+                || instance == null) {
+            return;
+        }
+        instance.renderedFrame();
     }
 
     static boolean enabled(String value) {
@@ -169,6 +182,17 @@ public final class VisualAcceptanceHarness {
             step.run();
         } catch (RuntimeException exception) {
             throw failure("step " + (stepIndex - 1) + " failed", exception);
+        }
+    }
+
+    private void renderedFrame() {
+        if (finished || asynchronousFailure != null) {
+            return;
+        }
+        try {
+            deferredFrameCapture.onRenderedFrame();
+        } catch (Throwable throwable) {
+            asynchronousFailure = throwable;
         }
     }
 
@@ -444,16 +468,38 @@ public final class VisualAcceptanceHarness {
         if (Files.exists(target)) {
             throw new IllegalStateException("Refusing to overwrite visual artifact: " + target);
         }
-        validateRenderedFrame(name);
-        pendingCapture = new PendingCapture(
+        PendingCapture requested = new PendingCapture(
                 name,
                 target,
                 scene,
                 minecraft.screen == null ? null : minecraft.screen.getClass().getName());
+        pendingCapture = requested;
         pendingCaptureStarted = elapsedTicks;
+        try {
+            deferredFrameCapture.request(() -> captureRenderedFrame(requested));
+        } catch (RuntimeException exception) {
+            pendingCapture = null;
+            throw exception;
+        }
+    }
+
+    private void captureRenderedFrame(PendingCapture requested) {
+        if (pendingCapture != requested) {
+            throw new IllegalStateException("Rendered frame arrived without its pending capture");
+        }
+        String currentScreen = minecraft.screen == null
+                ? null
+                : minecraft.screen.getClass().getName();
+        if (!Objects.equals(requested.screenClass(), currentScreen)) {
+            throw new IllegalStateException("Screen changed before rendered frame for "
+                    + requested.name()
+                    + ": "
+                    + (currentScreen == null ? "none" : currentScreen));
+        }
+        validateRenderedFrame(requested.name());
         Screenshot.grab(
                 outputRoot.toFile(),
-                name,
+                requested.name(),
                 minecraft.getMainRenderTarget(),
                 result -> minecraft.execute(() -> verifyCapture(result.getString())));
     }
@@ -505,6 +551,7 @@ public final class VisualAcceptanceHarness {
                     sha256(Files.readAllBytes(completed.target())),
                     completed.screenClass(),
                     completed.scene()));
+            deferredFrameCapture.complete();
             pendingCapture = null;
         } catch (Throwable throwable) {
             asynchronousFailure = throwable;
