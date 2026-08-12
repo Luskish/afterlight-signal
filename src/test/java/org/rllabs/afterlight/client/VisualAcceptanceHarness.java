@@ -358,15 +358,14 @@ public final class VisualAcceptanceHarness {
             int height,
             Class<? extends Screen> expectedScreen) {
         planned.add(() -> {
-            int[] stableTicks = {0};
+            ScreenPresentationReadiness readiness =
+                    new ScreenPresentationReadiness(width, height, STABLE_SCREEN_TICKS);
             await(
-                    () -> {
-                        boolean ready = expectedScreen.isInstance(minecraft.screen)
-                                && minecraft.getWindow().getWidth() == width
-                                && minecraft.getWindow().getHeight() == height;
-                        stableTicks[0] = ready ? stableTicks[0] + 1 : 0;
-                        return stableTicks[0] >= STABLE_SCREEN_TICKS;
-                    },
+                    () -> readiness.update(
+                            expectedScreen.isInstance(minecraft.screen),
+                            minecraft.getWindow().getWidth(),
+                            minecraft.getWindow().getHeight(),
+                            minecraft.getOverlay() != null),
                     "screen " + expectedScreen.getName() + " at " + width + "x" + height,
                     400);
         });
@@ -472,7 +471,9 @@ public final class VisualAcceptanceHarness {
                 name,
                 target,
                 scene,
-                minecraft.screen == null ? null : minecraft.screen.getClass().getName());
+                minecraft.screen == null ? null : minecraft.screen.getClass().getName(),
+                minecraft.getWindow().getWidth(),
+                minecraft.getWindow().getHeight());
         pendingCapture = requested;
         pendingCaptureStarted = elapsedTicks;
         try {
@@ -495,6 +496,23 @@ public final class VisualAcceptanceHarness {
                     + requested.name()
                     + ": "
                     + (currentScreen == null ? "none" : currentScreen));
+        }
+        int framebufferWidth = minecraft.getWindow().getWidth();
+        int framebufferHeight = minecraft.getWindow().getHeight();
+        boolean overlayActive = minecraft.getOverlay() != null;
+        if (!ScreenPresentationReadiness.isFrameReady(
+                true,
+                requested.framebufferWidth(),
+                requested.framebufferHeight(),
+                framebufferWidth,
+                framebufferHeight,
+                overlayActive)) {
+            if (overlayActive) {
+                throw new IllegalStateException(
+                        "Overlay became active before rendered frame for " + requested.name());
+            }
+            throw new IllegalStateException(
+                    "Framebuffer dimensions changed before rendered frame for " + requested.name());
         }
         validateRenderedFrame(requested.name());
         Screenshot.grab(
@@ -735,7 +753,9 @@ public final class VisualAcceptanceHarness {
             String name,
             Path target,
             VisualSceneProbe.SceneSnapshot scene,
-            String screenClass) {}
+            String screenClass,
+            int framebufferWidth,
+            int framebufferHeight) {}
 
     private record CapturedArtifact(
             String name,
