@@ -28,9 +28,7 @@ class ReleaseRecordContractTest {
     private static final String JAR = "afterlight-signal-0.2.0+1.21.1.jar";
     private static final Set<String> SOURCE_COMMIT_FILES = Set.of(
             RECORD_PATH,
-            "src/test/java/org/rllabs/afterlight/ReleaseJarContractTest.java",
-            "src/test/java/org/rllabs/afterlight/ReleaseRecordContractTest.java",
-            "src/test/java/org/rllabs/afterlight/client/VisualWorkflowContractTest.java");
+            "src/test/java/org/rllabs/afterlight/ReleaseRecordContractTest.java");
     private static final List<String> EVIDENCE_KEYS = List.of(
             "accepted_source_sha",
             "jar_sha256",
@@ -78,9 +76,9 @@ class ReleaseRecordContractTest {
         String currentCommit = git("rev-parse", "HEAD");
         String recordCommit = git("log", "-1", "--format=%H", "--", RECORD_PATH);
         String state = fields.get("state");
+        validateRecordOwnership(state, currentCommit, recordCommit);
 
         if ("SOURCE_PENDING".equals(state)) {
-            assertEquals(currentCommit, recordCommit, "pending record is not owned by HEAD");
             assertEquals(SOURCE_COMMIT_FILES, changedFiles(recordCommit));
             assertEquals(
                     currentCommit,
@@ -118,6 +116,25 @@ class ReleaseRecordContractTest {
                 AssertionError.class,
                 () -> validateCompletedEvidence(valid, "d".repeat(40)),
                 "accepted evidence bound to a different source commit");
+    }
+
+    @Test
+    void completedRecordRejectsLaterSourceCommits() {
+        assertDoesNotThrow(() -> validateRecordOwnership(
+                "COMPLETE", "a".repeat(40), "a".repeat(40)));
+        assertThrows(
+                AssertionError.class,
+                () -> validateRecordOwnership(
+                        "COMPLETE", "b".repeat(40), "a".repeat(40)),
+                "completed evidence authenticated a later source commit");
+    }
+
+    private static void validateRecordOwnership(
+            String state, String currentCommit, String recordCommit) {
+        assertEquals(
+                currentCommit,
+                recordCommit,
+                "release record is not owned by HEAD for state " + state);
     }
 
     private static Map<String, String> validCompletedEvidence(String acceptedSource) {
