@@ -27,10 +27,10 @@ class ReleaseRecordContractTest {
     private static final String BLOCK_END = "AFTERLIGHT_RELEASE_RECORD_END -->";
     private static final String JAR = "afterlight-signal-0.2.0+1.21.1.jar";
     private static final Set<String> SOURCE_COMMIT_FILES = Set.of(
-            ".github/workflows/build.yml",
-            ".github/workflows/visual-acceptance.yml",
             RECORD_PATH,
-            "src/test/java/org/rllabs/afterlight/ReleaseRecordContractTest.java");
+            "src/test/java/org/rllabs/afterlight/ReleaseJarContractTest.java",
+            "src/test/java/org/rllabs/afterlight/ReleaseRecordContractTest.java",
+            "src/test/java/org/rllabs/afterlight/client/VisualWorkflowContractTest.java");
     private static final List<String> EVIDENCE_KEYS = List.of(
             "accepted_source_sha",
             "jar_sha256",

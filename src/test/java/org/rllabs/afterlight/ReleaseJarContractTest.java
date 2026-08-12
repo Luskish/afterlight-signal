@@ -1041,13 +1041,13 @@ class ReleaseJarContractTest {
                                 "ref", "${{ github.sha }}",
                                 "path", "source-a",
                                 "clean", "true",
-                                "fetch-depth", "1",
+                                "fetch-depth", "0",
                                 "persist-credentials", "false"),
                         Map.of(
                                 "ref", "${{ github.sha }}",
                                 "path", "source-b",
                                 "clean", "true",
-                                "fetch-depth", "1",
+                                "fetch-depth", "0",
                                 "persist-credentials", "false")),
                 checkouts.stream().map(ReleaseWorkflowModel.Step::with).toList());
         ReleaseWorkflowModel.Step java = steps.stream()

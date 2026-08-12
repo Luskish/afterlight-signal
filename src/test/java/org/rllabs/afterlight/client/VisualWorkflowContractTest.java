@@ -61,6 +61,18 @@ class VisualWorkflowContractTest {
         assertEquals(Map.of("contents", "read"), map(workflow.get("permissions")));
 
         List<Map<String, Object>> steps = maps(capture.get("steps"));
+        Map<String, Object> checkout = steps.stream()
+                .filter(step -> step.get("uses") instanceof String action
+                        && action.startsWith("actions/checkout@"))
+                .findFirst()
+                .orElseThrow();
+        assertEquals(
+                Map.of(
+                        "ref", "${{ github.sha }}",
+                        "clean", true,
+                        "fetch-depth", 0,
+                        "persist-credentials", false),
+                map(checkout.get("with")));
         steps.stream()
                 .map(step -> step.get("uses"))
                 .filter(String.class::isInstance)
