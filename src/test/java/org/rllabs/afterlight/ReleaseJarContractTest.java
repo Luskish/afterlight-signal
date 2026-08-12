@@ -656,6 +656,31 @@ class ReleaseJarContractTest {
                 "ca.weblite:java-objc-bridge:1.1=compileClasspath"));
         assertTrue(linuxLock.contains(
                 "io.netty:netty-transport-native-epoll:4.1.97.Final=additionalRuntimeClasspath"));
+        assertEquals(
+                Map.of(
+                        "ca.weblite:java-objc-bridge:1.1",
+                        Set.of(
+                                "compileClasspath",
+                                "neoFormRuntimeDependenciesCompileClasspath",
+                                "testCompileClasspath"),
+                        "io.netty:netty-transport-native-epoll:4.1.97.Final",
+                        Set.of(
+                                "additionalRuntimeClasspath",
+                                "clientLegacyClasspath",
+                                "gameTestServerLegacyClasspath",
+                                "neoForgeTestLibraries",
+                                "neoFormRuntimeDependenciesRuntimeClasspath",
+                                "runtimeClasspath",
+                                "testRuntimeClasspath",
+                                "visualClientLegacyClasspath",
+                                "visualServerLegacyClasspath")),
+                Map.of(
+                        "ca.weblite:java-objc-bridge:1.1",
+                        lockMemberships(linuxLock, "ca.weblite:java-objc-bridge:1.1"),
+                        "io.netty:netty-transport-native-epoll:4.1.97.Final",
+                        lockMemberships(
+                                linuxLock,
+                                "io.netty:netty-transport-native-epoll:4.1.97.Final")));
     }
 
     @Test
@@ -667,6 +692,9 @@ class ReleaseJarContractTest {
         assertTrue(readme.contains(
                 "gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=macos --no-daemon --no-build-cache --rerun-tasks"));
         assertTrue(readme.contains("replace `macos` with `linux`"));
+        assertTrue(readme.contains(
+                "Regenerate `gradle/dependency-locks/linux.lockfile` only on Linux. "
+                        + "Never regenerate it on macOS."));
     }
 
     @Test
@@ -2214,6 +2242,16 @@ class ReleaseJarContractTest {
         return Arrays.stream(value.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator)))
                 .filter(path -> !path.isBlank())
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
+    private static Set<String> lockMemberships(String lockfile, String dependency) {
+        String prefix = dependency + "=";
+        return lockfile.lines()
+                .filter(line -> line.startsWith(prefix))
+                .map(line -> line.substring(prefix.length()))
+                .map(configurations -> Set.of(configurations.split(",")))
+                .findFirst()
+                .orElseThrow();
     }
 
     private static List<SecretFixture> secretFixtures() {

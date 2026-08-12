@@ -34,6 +34,8 @@ gradle clean test runGameTestServer build -PafterlightLockContext=macos --no-dae
 
 The lock context is mandatory and selects the committed dependency graph for the execution platform. These examples use `macos`. On Linux, replace `macos` with `linux`. Unsupported or omitted contexts fail before dependency resolution.
 
+Regenerate `gradle/dependency-locks/linux.lockfile` only on Linux. Never regenerate it on macOS. Platform-native runtime membership is part of the authenticated lock contract.
+
 The build still rejects symlinked and hardlinked source inputs because Gradle must never consume an aliased source tree. This source gate requires POSIX permissions and the `unix:nlink` file attribute, so developer and release builds are supported on macOS and Linux POSIX filesystems. Native Windows filesystems are not supported by the source gate. Use Linux CI or WSL backed by a POSIX filesystem instead.
 
 ### Dedicated Relay Migration Acceptance

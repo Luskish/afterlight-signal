@@ -88,6 +88,47 @@ class VisualWorkflowContractTest {
     }
 
     @Test
+    void parsedWorkflowDisablesMirrorIndirectionAndDefinesSignedSnapshotSource()
+            throws Exception {
+        Map<String, Object> workflow = workflow();
+        Map<String, Object> capture = map(map(workflow.get("jobs")).get("capture"));
+        String install = runStep(
+                maps(capture.get("steps")), "Install pinned Xvfb and Mesa snapshot");
+
+        assertTrue(
+                install.contains(
+                        "grep -Eq '^URIs:[[:space:]]+mirror\\+file:"
+                                + "/etc/apt/apt-mirrors\\.txt$' "
+                                + "/etc/apt/sources.list.d/ubuntu.sources"),
+                "workflow does not authenticate the runner mirror+file source");
+        assertTrue(
+                install.contains(
+                        "sudo mv /etc/apt/sources.list.d/ubuntu.sources "
+                                + "/etc/apt/disabled-sources/ubuntu.sources"),
+                "workflow leaves the mirror+file source active");
+        assertTrue(
+                install.contains(
+                        "sudo mv /etc/apt/apt-mirrors.txt "
+                                + "/etc/apt/disabled-sources/apt-mirrors.txt"),
+                "workflow leaves the runner mirror list active");
+        assertEquals(
+                Map.of(
+                        "Types", "deb",
+                        "URIs", "https://snapshot.ubuntu.com/ubuntu/20250115T000000Z/",
+                        "Suites", "noble noble-updates noble-security",
+                        "Components", "main restricted universe multiverse",
+                        "Signed-By", "/usr/share/keyrings/ubuntu-archive-keyring.gpg"),
+                deb822Source(install));
+        assertTrue(
+                install.contains("Active live Ubuntu mirror remained after snapshot setup"),
+                "workflow does not fail closed when an active live mirror remains");
+        assertFalse(install.contains("sudo sed -Ei"));
+        assertFalse(install.contains("azure.archive.ubuntu.com"));
+        assertFalse(install.contains("archive.ubuntu.com"));
+        assertFalse(install.contains("security.ubuntu.com"));
+    }
+
+    @Test
     void visualShellScriptsParseAndRendererHelperAcceptsOnlySoftwareMesa(@TempDir Path temp)
             throws Exception {
         Path runner = ROOT.resolve("tools/run-visual-acceptance-linux.sh");
@@ -213,6 +254,20 @@ class VisualWorkflowContractTest {
                 .map(step -> (String) step.get("run"))
                 .findFirst()
                 .orElseThrow();
+    }
+
+    private static Map<String, String> deb822Source(String script) {
+        String opening = "sudo tee /etc/apt/sources.list.d/ubuntu-snapshot.sources "
+                + ">/dev/null <<'EOF'\n";
+        int start = script.indexOf(opening);
+        assertTrue(start >= 0, "missing authoritative deb822 snapshot source");
+        int contentStart = start + opening.length();
+        int end = script.indexOf("\nEOF\n", contentStart);
+        assertTrue(end >= 0, "unterminated authoritative deb822 snapshot source");
+        return script.substring(contentStart, end).lines()
+                .map(line -> line.split(": ", 2))
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        parts -> parts[0], parts -> parts[1]));
     }
 
     private static CommandResult command(String... command) throws Exception {
