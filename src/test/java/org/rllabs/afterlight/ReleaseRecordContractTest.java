@@ -146,7 +146,7 @@ class ReleaseRecordContractTest {
                 Map.entry("jar_sha512", sha512),
                 Map.entry(
                         "local_double_build",
-                        "PASS;copies=2;junit=333;gametests=59;sha256="
+                        "PASS;copies=2;junit=335;gametests=59;sha256="
                                 + sha256
                                 + ";sha512="
                                 + sha512),
@@ -190,7 +190,7 @@ class ReleaseRecordContractTest {
         assertMatches(sha256, "[0-9a-f]{64}", "jar_sha256");
         assertMatches(sha512, "[0-9a-f]{128}", "jar_sha512");
         assertEquals(
-                "PASS;copies=2;junit=333;gametests=59;sha256="
+                "PASS;copies=2;junit=335;gametests=59;sha256="
                         + sha256
                         + ";sha512="
                         + sha512,
