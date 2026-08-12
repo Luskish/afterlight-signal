@@ -1,7 +1,9 @@
 package org.rllabs.afterlight;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -26,11 +28,8 @@ class ReleaseRecordContractTest {
     private static final String JAR = "afterlight-signal-0.2.0+1.21.1.jar";
     private static final Set<String> SOURCE_COMMIT_FILES = Set.of(
             ".github/workflows/build.yml",
-            "README.md",
+            ".github/workflows/visual-acceptance.yml",
             RECORD_PATH,
-            "gradle.properties",
-            "src/main/resources/META-INF/neoforge.mods.toml",
-            "src/test/java/org/rllabs/afterlight/ReleaseJarContractTest.java",
             "src/test/java/org/rllabs/afterlight/ReleaseRecordContractTest.java");
     private static final List<String> EVIDENCE_KEYS = List.of(
             "accepted_source_sha",
@@ -77,13 +76,12 @@ class ReleaseRecordContractTest {
         assertEquals(JAR + "," + JAR + ".sha256," + JAR + ".sha512", fields.get("assets"));
 
         String currentCommit = git("rev-parse", "HEAD");
-        String parentCommit = git("rev-parse", "HEAD^");
-        Set<String> changedFiles = Set.copyOf(lines(git(
-                "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD")));
+        String recordCommit = git("log", "-1", "--format=%H", "--", RECORD_PATH);
         String state = fields.get("state");
 
         if ("SOURCE_PENDING".equals(state)) {
-            assertEquals(SOURCE_COMMIT_FILES, changedFiles);
+            assertEquals(currentCommit, recordCommit, "pending record is not owned by HEAD");
+            assertEquals(SOURCE_COMMIT_FILES, changedFiles(recordCommit));
             assertEquals(
                     currentCommit,
                     System.getProperty("afterlight.source.commit"),
@@ -95,12 +93,123 @@ class ReleaseRecordContractTest {
         }
 
         assertEquals("COMPLETE", state);
-        assertEquals(Set.of(RECORD_PATH), changedFiles);
-        assertEquals(parentCommit, fields.get("accepted_source_sha"));
+        String parentCommit = git("rev-parse", recordCommit + "^");
+        assertEquals(Set.of(RECORD_PATH), changedFiles(recordCommit));
         assertFalse(document.contains("PENDING"), "complete release record contains pending evidence");
+        validateCompletedEvidence(fields, parentCommit);
+    }
+
+    @Test
+    void completedEvidenceRejectsMalformedOrUnboundClaims() {
+        String acceptedSource = "a".repeat(40);
+        Map<String, String> valid = validCompletedEvidence(acceptedSource);
+        assertDoesNotThrow(() -> validateCompletedEvidence(valid, acceptedSource));
+
         for (String key : EVIDENCE_KEYS) {
-            assertFalse(fields.get(key).isBlank(), "blank completed field: " + key);
+            Map<String, String> malformed = new LinkedHashMap<>(valid);
+            malformed.put(key, "arbitrary nonblank claim");
+            assertThrows(
+                    AssertionError.class,
+                    () -> validateCompletedEvidence(Map.copyOf(malformed), acceptedSource),
+                    "accepted malformed completed field: " + key);
         }
+
+        assertThrows(
+                AssertionError.class,
+                () -> validateCompletedEvidence(valid, "d".repeat(40)),
+                "accepted evidence bound to a different source commit");
+    }
+
+    private static Map<String, String> validCompletedEvidence(String acceptedSource) {
+        String sha256 = "b".repeat(64);
+        String sha512 = "c".repeat(128);
+        return Map.ofEntries(
+                Map.entry("accepted_source_sha", acceptedSource),
+                Map.entry("jar_sha256", sha256),
+                Map.entry("jar_sha512", sha512),
+                Map.entry(
+                        "local_double_build",
+                        "PASS;copies=2;junit=333;gametests=59;sha256="
+                                + sha256
+                                + ";sha512="
+                                + sha512),
+                Map.entry(
+                        "linux_build_ci",
+                        "PASS;url=https://github.com/Luskish/afterlight-signal/actions/runs/1;head="
+                                + acceptedSource),
+                Map.entry(
+                        "visual_ci",
+                        "PASS;url=https://github.com/Luskish/afterlight-signal/actions/runs/2;head="
+                                + acceptedSource
+                                + ";screenshots=22"),
+                Map.entry(
+                        "visual_artifact",
+                        "PASS;name=afterlight-visual-acceptance-"
+                                + acceptedSource
+                                + ";manifest_sha256="
+                                + "d".repeat(64)),
+                Map.entry(
+                        "visual_review",
+                        "APPROVE;screenshots=22;duplicates=0;blank=0;wrong_state=0;wrong_location=0;unloaded=0;placeholder=0;concept=0"),
+                Map.entry(
+                        "route_evidence",
+                        "PASS;log_sha256="
+                                + "e".repeat(64)
+                                + ";prepare=OK;verify=OK;outbound=SUCCESS;return=SUCCESS;repeated_writes=0"),
+                Map.entry("final_review", "APPROVE;critical=0;important=0"),
+                Map.entry(
+                        "public_release",
+                        "PASS;url=https://github.com/Luskish/afterlight-signal/releases/tag/v0.2.0;assets=3;byte_equal=true"));
+    }
+
+    private static void validateCompletedEvidence(
+            Map<String, String> fields, String expectedSource) {
+        String acceptedSource = fields.get("accepted_source_sha");
+        assertMatches(acceptedSource, "[0-9a-f]{40}", "accepted_source_sha");
+        assertEquals(expectedSource, acceptedSource, "completed evidence is not bound to its parent source");
+
+        String sha256 = fields.get("jar_sha256");
+        String sha512 = fields.get("jar_sha512");
+        assertMatches(sha256, "[0-9a-f]{64}", "jar_sha256");
+        assertMatches(sha512, "[0-9a-f]{128}", "jar_sha512");
+        assertEquals(
+                "PASS;copies=2;junit=333;gametests=59;sha256="
+                        + sha256
+                        + ";sha512="
+                        + sha512,
+                fields.get("local_double_build"));
+        assertMatches(
+                fields.get("linux_build_ci"),
+                "PASS;url=https://github\\.com/Luskish/afterlight-signal/actions/runs/[1-9][0-9]*;head="
+                        + acceptedSource,
+                "linux_build_ci");
+        assertMatches(
+                fields.get("visual_ci"),
+                "PASS;url=https://github\\.com/Luskish/afterlight-signal/actions/runs/[1-9][0-9]*;head="
+                        + acceptedSource
+                        + ";screenshots=22",
+                "visual_ci");
+        assertMatches(
+                fields.get("visual_artifact"),
+                "PASS;name=afterlight-visual-acceptance-"
+                        + acceptedSource
+                        + ";manifest_sha256=[0-9a-f]{64}",
+                "visual_artifact");
+        assertEquals(
+                "APPROVE;screenshots=22;duplicates=0;blank=0;wrong_state=0;wrong_location=0;unloaded=0;placeholder=0;concept=0",
+                fields.get("visual_review"));
+        assertMatches(
+                fields.get("route_evidence"),
+                "PASS;log_sha256=[0-9a-f]{64};prepare=OK;verify=OK;outbound=SUCCESS;return=SUCCESS;repeated_writes=0",
+                "route_evidence");
+        assertEquals("APPROVE;critical=0;important=0", fields.get("final_review"));
+        assertEquals(
+                "PASS;url=https://github.com/Luskish/afterlight-signal/releases/tag/v0.2.0;assets=3;byte_equal=true",
+                fields.get("public_release"));
+    }
+
+    private static void assertMatches(String value, String pattern, String field) {
+        assertTrue(value != null && value.matches(pattern), "malformed completed field: " + field);
     }
 
     private static Map<String, String> recordFields(String document) {
@@ -131,6 +240,11 @@ class ReleaseRecordContractTest {
         return Arrays.stream(output.split("\\R"))
                 .filter(line -> !line.isBlank())
                 .toList();
+    }
+
+    private static Set<String> changedFiles(String commit) throws IOException, InterruptedException {
+        return Set.copyOf(lines(git(
+                "diff-tree", "--no-commit-id", "--name-only", "-r", commit)));
     }
 
     private static String git(String... arguments) throws IOException, InterruptedException {
