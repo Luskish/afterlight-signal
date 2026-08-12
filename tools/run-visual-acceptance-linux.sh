@@ -55,7 +55,9 @@ done
 
 mkdir -p "$artifact_root"
 dpkg-query -W -f='${binary:Package}\t${Version}\n' \
-  xvfb xauth libgl1-mesa-dri libglx-mesa0 mesa-utils \
+  xvfb xauth \
+  libgl1-mesa-dri libglx-mesa0 libglapi-mesa libegl-mesa0 libgbm1 \
+  mesa-utils \
   | LC_ALL=C sort >"$artifact_root/ubuntu-package-versions.txt"
 
 export DISPLAY="${AFTERLIGHT_VISUAL_DISPLAY:-:99}"

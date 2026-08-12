@@ -1,5 +1,6 @@
 package org.rllabs.afterlight.client;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -10,16 +11,21 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.snakeyaml.engine.v2.api.Load;
 import org.snakeyaml.engine.v2.api.LoadSettings;
 
 class VisualWorkflowContractTest {
+    private static final Pattern PACKAGE_PIN = Pattern.compile(
+            "^([a-z0-9][a-z0-9+.-]*)=([0-9][A-Za-z0-9.+:~-]*)(?:\\s+\\\\)?$");
     private static final Path ROOT = Path.of(System.getProperty("afterlight.source.root", "."))
             .toAbsolutePath()
             .normalize();
@@ -126,6 +132,57 @@ class VisualWorkflowContractTest {
         assertFalse(install.contains("azure.archive.ubuntu.com"));
         assertFalse(install.contains("archive.ubuntu.com"));
         assertFalse(install.contains("security.ubuntu.com"));
+    }
+
+    @Test
+    void visualRuntimePackageContractIsPinnedVerifiedAndRecorded() throws Exception {
+        Map<String, Object> workflow = workflow();
+        Map<String, Object> capture = map(map(workflow.get("jobs")).get("capture"));
+        String install = runStep(
+                maps(capture.get("steps")), "Install pinned Xvfb and Mesa snapshot");
+        Map<String, String> expectedPins = Map.ofEntries(
+                Map.entry("xvfb", "2:21.1.12-1ubuntu1.1"),
+                Map.entry("xauth", "1:1.1.2-1build1"),
+                Map.entry("libgl1-mesa-dri", "24.0.9-0ubuntu0.3"),
+                Map.entry("libglx-mesa0", "24.0.9-0ubuntu0.3"),
+                Map.entry("libglapi-mesa", "24.0.9-0ubuntu0.3"),
+                Map.entry("libegl-mesa0", "24.0.9-0ubuntu0.3"),
+                Map.entry("libgbm1", "24.0.9-0ubuntu0.3"),
+                Map.entry("mesa-utils", "9.0.0-2"));
+        Map<String, String> expectedMesaRuntime = Map.of(
+                "libgl1-mesa-dri", "24.0.9-0ubuntu0.3",
+                "libglx-mesa0", "24.0.9-0ubuntu0.3",
+                "libglapi-mesa", "24.0.9-0ubuntu0.3",
+                "libegl-mesa0", "24.0.9-0ubuntu0.3",
+                "libgbm1", "24.0.9-0ubuntu0.3");
+        Map<String, String> actualPins = packagePins(install);
+        Map<String, String> actualMesaRuntime = actualPins.entrySet().stream()
+                .filter(entry -> "24.0.9-0ubuntu0.3".equals(entry.getValue()))
+                .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                        Map.Entry::getKey, Map.Entry::getValue));
+        String runner = Files.readString(ROOT.resolve("tools/run-visual-acceptance-linux.sh"));
+
+        assertAll(
+                () -> assertEquals(expectedPins, actualPins, "incomplete visual package pins"),
+                () -> assertEquals(
+                        expectedMesaRuntime,
+                        actualMesaRuntime,
+                        "Mesa runtime closure is incomplete or includes unrelated packages"),
+                () -> assertTrue(
+                        install.contains("for package_pin in \"${pinned_packages[@]}\"; do"),
+                        "installed versions are not checked for every pin"),
+                () -> assertTrue(
+                        install.contains(
+                                "installed_version=\"$(dpkg-query -W -f='${Version}' "
+                                        + "\"$package_name\")\""),
+                        "installed versions are not read through dpkg-query"),
+                () -> assertTrue(
+                        install.contains("Pinned package version mismatch:"),
+                        "version mismatch does not fail loudly"),
+                () -> assertEquals(
+                        expectedPins.keySet(),
+                        packageVersionInventory(runner),
+                        "ubuntu-package-versions.txt inventory is incomplete"));
     }
 
     @Test
@@ -268,6 +325,30 @@ class VisualWorkflowContractTest {
                 .map(line -> line.split(": ", 2))
                 .collect(java.util.stream.Collectors.toUnmodifiableMap(
                         parts -> parts[0], parts -> parts[1]));
+    }
+
+    private static Map<String, String> packagePins(String script) {
+        Map<String, String> pins = new LinkedHashMap<>();
+        for (String line : script.lines().toList()) {
+            Matcher matcher = PACKAGE_PIN.matcher(line.strip());
+            if (matcher.matches()) {
+                pins.put(matcher.group(1), matcher.group(2));
+            }
+        }
+        return Map.copyOf(pins);
+    }
+
+    private static Set<String> packageVersionInventory(String runner) {
+        String opening = "dpkg-query -W -f='${binary:Package}\\t${Version}\\n' \\\n";
+        int start = runner.indexOf(opening);
+        assertTrue(start >= 0, "missing ubuntu-package-versions.txt query");
+        int contentStart = start + opening.length();
+        int end = runner.indexOf("  | LC_ALL=C sort >", contentStart);
+        assertTrue(end >= 0, "unterminated ubuntu-package-versions.txt query");
+        return runner.substring(contentStart, end).lines()
+                .flatMap(line -> java.util.Arrays.stream(line.strip().split("\\s+")))
+                .filter(token -> !"\\".equals(token))
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     private static CommandResult command(String... command) throws Exception {

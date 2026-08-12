@@ -79,15 +79,31 @@ jobs:
             exit 1
           fi
           sudo apt-get -o Acquire::Check-Valid-Until=false update
+          pinned_packages=(
+            xvfb=2:21.1.12-1ubuntu1.1
+            xauth=1:1.1.2-1build1
+            libgl1-mesa-dri=24.0.9-0ubuntu0.3
+            libglx-mesa0=24.0.9-0ubuntu0.3
+            libglapi-mesa=24.0.9-0ubuntu0.3
+            libegl-mesa0=24.0.9-0ubuntu0.3
+            libgbm1=24.0.9-0ubuntu0.3
+            mesa-utils=9.0.0-2
+          )
           sudo apt-get -o Acquire::Check-Valid-Until=false install \
             --allow-downgrades \
             --no-install-recommends \
             -y \
-            xvfb=2:21.1.12-1ubuntu1.1 \
-            xauth=1:1.1.2-1build1 \
-            libgl1-mesa-dri=24.0.9-0ubuntu0.3 \
-            libglx-mesa0=24.0.9-0ubuntu0.3 \
-            mesa-utils=9.0.0-2
+            "${pinned_packages[@]}"
+          for package_pin in "${pinned_packages[@]}"; do
+            package_name="${package_pin%%=*}"
+            expected_version="${package_pin#*=}"
+            installed_version="$(dpkg-query -W -f='${Version}' "$package_name")"
+            if [[ "$installed_version" != "$expected_version" ]]; then
+              printf 'Pinned package version mismatch: %s expected=%s actual=%s\n' \
+                "$package_name" "$expected_version" "$installed_version" >&2
+              exit 1
+            fi
+          done
       - name: Render acceptance artifacts
         run: ./tools/run-visual-acceptance-linux.sh
       - name: Upload rendered PNG inventory
