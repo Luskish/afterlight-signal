@@ -1,6 +1,7 @@
 package org.rllabs.afterlight.relay;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -85,6 +86,32 @@ class FarRelayStructurePlanTest {
             assertEquals(site.directionTowardCenter(), console.facing(), site.toString());
             assertTrue(console.active(), site.toString());
         }
+    }
+
+    @Test
+    void functionalCoreStopsBeforeTheExpandedPresentationFootprint() {
+        Plan central = FarRelayStructurePlan.forSite(RelaySite.CENTRAL);
+
+        assertTrue(FarRelayInitializer.isFunctionalCorePlacement(
+                RelaySite.CENTRAL, central.placementAt(5, 0, 5).orElseThrow()));
+        assertTrue(FarRelayInitializer.isFunctionalCorePlacement(
+                RelaySite.CENTRAL, central.placementAt(0, 1, 3).orElseThrow()));
+        assertTrue(FarRelayInitializer.isFunctionalCorePlacement(
+                RelaySite.CENTRAL, central.placementAt(3, 1, 0).orElseThrow()));
+        assertFalse(FarRelayInitializer.isFunctionalCorePlacement(
+                RelaySite.CENTRAL, central.placementAt(8, 0, 0).orElseThrow()));
+        assertFalse(FarRelayInitializer.isFunctionalCorePlacement(
+                RelaySite.EAST,
+                FarRelayStructurePlan.forSite(RelaySite.EAST)
+                        .anchors()
+                        .stream()
+                        .filter(anchor -> anchor.name().equals("future_console"))
+                        .map(anchor -> FarRelayStructurePlan.forSite(RelaySite.EAST)
+                                .placementAt(anchor.x(), anchor.y(), anchor.z())
+                                .orElseThrow())
+                        .findFirst()
+                        .orElseThrow()));
+        assertTrue(central.constructionRadius() > 7);
     }
 
     private static void assertCorePlatform(Plan plan) {

@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.UUID;
 import net.minecraft.advancements.AdvancementHolder;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
@@ -28,6 +29,7 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.portal.DimensionTransition;
 import net.minecraft.world.phys.Vec3;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -41,7 +43,9 @@ import org.rllabs.afterlight.gate.GateActivationService.ActivationDecision;
 import org.rllabs.afterlight.relay.FarRelayInitializer;
 import org.rllabs.afterlight.relay.FarRelayKeys;
 import org.rllabs.afterlight.relay.FarRelaySavedData;
+import org.rllabs.afterlight.relay.FarRelayStructurePlan;
 import org.rllabs.afterlight.relay.RelaySite;
+import org.rllabs.afterlight.relay.SignalTerminalBlock;
 
 @GameTestHolder(Afterlight.MOD_ID)
 @PrefixGameTestTemplate(false)
@@ -183,6 +187,128 @@ public final class GateTravelGameTests {
                 advancementDone(player, FarRelayKeys.FAR_RELAY_ARRIVAL),
                 "arrival advancement missing after outbound transfer");
         removePlayer(helper, player);
+        helper.succeed();
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_migration",
+            timeoutTicks = 1200)
+    public static void preV2DecorativeConflictPreservesTravelAndCompletesOnce(
+            GameTestHelper helper) {
+        ServerLevel source = helper.getLevel();
+        ServerLevel relay = source;
+        FarRelayInitializer.ensureAll(relay);
+        FarRelaySavedData data = FarRelaySavedData.get(relay);
+        int floorY = data.platformY(RelaySite.CENTRAL).orElseThrow();
+        BlockPos conflict = new BlockPos(RelaySite.CENTRAL.x() + 8, floorY, RelaySite.CENTRAL.z());
+        BlockPos safeUpgrade = new BlockPos(
+                RelaySite.CENTRAL.x(), floorY + 13, RelaySite.CENTRAL.z() - 10);
+        BlockPos postMigrationEdit = new BlockPos(
+                RelaySite.CENTRAL.x() - 9, floorY + 5, RelaySite.CENTRAL.z() - 6);
+        BlockPos returnTerminal = new BlockPos(
+                RelaySite.CENTRAL.x() + 3, floorY + 1, RelaySite.CENTRAL.z());
+        BlockPos chestPosition = new BlockPos(
+                RelaySite.CENTRAL.x(), floorY + 1, RelaySite.CENTRAL.z() + 3);
+        ServerPlayer player = null;
+
+        try {
+            reduceCentralToPreV2(relay, floorY);
+            data.markPresented(RelaySite.CENTRAL, 0);
+            relay.setBlock(conflict, Blocks.DIAMOND_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
+            BlockState terminalBefore = EchoContent.RETURN_TERMINAL
+                    .get()
+                    .defaultBlockState()
+                    .setValue(SignalTerminalBlock.FACING, Direction.SOUTH)
+                    .setValue(SignalTerminalBlock.ACTIVE, false);
+            relay.setBlock(returnTerminal, terminalBefore, Block.UPDATE_ALL);
+            ChestBlockEntity chestBefore = (ChestBlockEntity) relay.getBlockEntity(chestPosition);
+            chestBefore.getItem(0);
+            chestBefore.clearContent();
+            chestBefore.setChanged();
+            CompoundTag chestBeforeTag = chestBefore.saveWithFullMetadata(relay.registryAccess());
+
+            FarRelayInitializer.ensureAll(relay);
+
+            helper.assertValueEqual(
+                    Blocks.DIAMOND_BLOCK.defaultBlockState(),
+                    relay.getBlockState(conflict),
+                    "pre-v2 x=8 decorative conflict");
+            helper.assertValueEqual(
+                    FarRelayStructurePlan.PRESENTATION_VERSION,
+                    data.presentationVersion(RelaySite.CENTRAL),
+                    "conflict-tolerant presentation version");
+            helper.assertValueEqual(
+                    EchoContent.GATE_FRAME.get(),
+                    relay.getBlockState(safeUpgrade).getBlock(),
+                    "safe cathedral upgrade");
+            helper.assertValueEqual(
+                    terminalBefore,
+                    relay.getBlockState(returnTerminal),
+                    "pre-v2 terminal state");
+            helper.assertValueEqual(
+                    chestBeforeTag,
+                    ((ChestBlockEntity) relay.getBlockEntity(chestPosition))
+                            .saveWithFullMetadata(relay.registryAccess()),
+                    "pre-v2 consumed chest metadata");
+            helper.assertTrue(
+                    FarRelayInitializer.centralArrival(relay).isPresent(),
+                    "functional arrival after decorative conflict");
+
+            relay.setBlock(postMigrationEdit, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+            Map<BlockPos, BlockState> beforeReloadEnsure = snapshotCentralPlan(relay, floorY);
+            CompoundTag persisted = data.save(new CompoundTag(), relay.registryAccess());
+            FarRelaySavedData reloaded = FarRelaySavedData.load(persisted, relay.registryAccess());
+            relay.getDataStorage().set("afterlight_far_relay", reloaded);
+
+            FarRelayInitializer.ensureAll(relay);
+
+            helper.assertValueEqual(
+                    beforeReloadEnsure,
+                    snapshotCentralPlan(relay, floorY),
+                    "second ensure structure snapshot");
+            helper.assertTrue(
+                    relay.getBlockState(postMigrationEdit).isAir(),
+                    "completed presentation migration retried decoration");
+            helper.assertFalse(reloaded.isDirty(), "second ensure dirtied saved migration state");
+            helper.assertValueEqual(
+                    chestBeforeTag,
+                    ((ChestBlockEntity) relay.getBlockEntity(chestPosition))
+                            .saveWithFullMetadata(relay.registryAccess()),
+                    "reloaded consumed chest metadata");
+
+            BlockPos sourceController = helper.absolutePos(CONTROLLER);
+            BlockPos expectedReturn = sourceController.above();
+            prepareSafePosition(source, expectedReturn);
+            player = helper.makeMockServerPlayerInLevel();
+            player.moveTo(expectedReturn.getBottomCenter(), 37.0F, -11.0F);
+
+            GateTravelService.TravelResult outbound =
+                    GateTravelService.INSTANCE.travelToFarRelay(
+                            player, sourceController, relay);
+
+            helper.assertValueEqual(
+                    GateTravelService.TravelResult.SUCCESS, outbound, "migration outbound result");
+            helper.assertValueEqual(relay, player.serverLevel(), "migration outbound level");
+            helper.assertValueEqual(
+                    FarRelayInitializer.centralArrival(relay).orElseThrow(),
+                    player.blockPosition(),
+                    "migration outbound arrival");
+            helper.assertTrue(
+                    GateTravelService.INSTANCE.returnPlayer(player),
+                    "migration return travel failed");
+            helper.assertValueEqual(source, player.serverLevel(), "migration return level");
+            helper.assertValueEqual(expectedReturn, player.blockPosition(), "migration return position");
+            helper.assertTrue(
+                    player.getExistingData(EchoContent.GATE_RETURN_TARGET).isEmpty(),
+                    "migration return retained route");
+        } finally {
+            if (player != null) {
+                removePlayer(helper, player);
+            }
+            restoreCentralAfterMigrationTest(relay, floorY, conflict, returnTerminal, chestPosition);
+        }
         helper.succeed();
     }
 
@@ -545,6 +671,67 @@ public final class GateTravelGameTests {
             helper.setBlock(position, block);
         }
         return helper.getBlockEntity(CONTROLLER);
+    }
+
+    private static void reduceCentralToPreV2(ServerLevel level, int floorY) {
+        for (FarRelayStructurePlan.Placement placement :
+                FarRelayStructurePlan.forSite(RelaySite.CENTRAL).placements()) {
+            boolean legacyFloor = placement.y() == 0
+                    && Math.abs(placement.x()) <= 5
+                    && Math.abs(placement.z()) <= 5;
+            boolean legacyChest = placement.x() == 0
+                    && placement.y() == 1
+                    && placement.z() == 3;
+            boolean legacyTerminal = placement.y() == 1
+                    && placement.z() == 0
+                    && Math.abs(placement.x()) == 3;
+            if (!legacyFloor && !legacyChest && !legacyTerminal) {
+                level.setBlock(
+                        FarRelayStructurePlan.worldPosition(
+                                RelaySite.CENTRAL, floorY, placement),
+                        Blocks.AIR.defaultBlockState(),
+                        Block.UPDATE_ALL);
+            }
+        }
+    }
+
+    private static Map<BlockPos, BlockState> snapshotCentralPlan(ServerLevel level, int floorY) {
+        Map<BlockPos, BlockState> snapshot = new LinkedHashMap<>();
+        for (FarRelayStructurePlan.Placement placement :
+                FarRelayStructurePlan.forSite(RelaySite.CENTRAL).placements()) {
+            BlockPos position = FarRelayStructurePlan.worldPosition(
+                    RelaySite.CENTRAL, floorY, placement);
+            snapshot.put(position, level.getBlockState(position));
+        }
+        return Map.copyOf(snapshot);
+    }
+
+    private static void restoreCentralAfterMigrationTest(
+            ServerLevel level,
+            int floorY,
+            BlockPos conflict,
+            BlockPos returnTerminal,
+            BlockPos chestPosition) {
+        level.setBlock(conflict, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        FarRelaySavedData data = FarRelaySavedData.get(level);
+        data.markPresented(RelaySite.CENTRAL, 0);
+        FarRelayInitializer.ensureAll(level);
+        FarRelayStructurePlan.Placement terminalPlacement = FarRelayStructurePlan
+                .forSite(RelaySite.CENTRAL)
+                .placementAt(3, 1, 0)
+                .orElseThrow();
+        level.setBlock(
+                returnTerminal,
+                EchoContent.RETURN_TERMINAL
+                        .get()
+                        .defaultBlockState()
+                        .setValue(SignalTerminalBlock.FACING, terminalPlacement.facing())
+                        .setValue(SignalTerminalBlock.ACTIVE, terminalPlacement.active()),
+                Block.UPDATE_ALL);
+        ChestBlockEntity chest = (ChestBlockEntity) level.getBlockEntity(chestPosition);
+        chest.setLootTable(FarRelayKeys.LOOT_TABLE);
+        chest.setLootTableSeed(0xA17E0000L + RelaySite.CENTRAL.ordinal());
+        chest.setChanged();
     }
 
     private static boolean advancementDone(ServerPlayer player, ResourceLocation id) {

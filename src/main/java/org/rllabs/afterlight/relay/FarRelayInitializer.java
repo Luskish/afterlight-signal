@@ -52,33 +52,53 @@ public final class FarRelayInitializer {
         Plan plan = FarRelayStructurePlan.forSite(site);
         loadConstructionChunks(level, site, plan.constructionRadius());
         if (data.isInitialized(site)) {
-            int platformY = data.platformY(site).orElseGet(() -> rediscoverPlatformY(level, site)
-                    .orElseGet(() -> findPlatformY(level, site)));
+            OptionalInt storedPlatformY = data.platformY(site);
+            OptionalInt rediscoveredPlatformY = storedPlatformY.isPresent()
+                    ? OptionalInt.empty()
+                    : rediscoverPlatformY(level, site);
+            boolean reconstructMissingSite = storedPlatformY.isEmpty()
+                    && rediscoveredPlatformY.isEmpty();
+            int platformY = storedPlatformY.isPresent()
+                    ? storedPlatformY.orElseThrow()
+                    : rediscoveredPlatformY.orElseGet(() -> findPlatformY(level, site));
             boolean legacyPresentation = data.presentationVersion(site)
                     < FarRelayStructurePlan.PRESENTATION_VERSION;
-            repairMarkedSite(level, site, platformY, plan, legacyPresentation);
-            if (!isComplete(level, site, platformY, plan, false, false)) {
+            repairFunctionalCore(level, site, platformY, plan);
+            if (!isFunctionalCoreComplete(level, site, platformY, plan, false)) {
                 throw new IllegalStateException(
-                        "Far Relay marked site repair blocked: "
+                        "Far Relay functional core repair blocked: "
                                 + site
                                 + " at Y "
                                 + platformY
                                 + ", "
-                                + firstIncompleteRequirement(level, site, platformY, plan, false));
+                                + firstIncompleteFunctionalRequirement(
+                                        level, site, platformY, plan, false));
+            }
+            if (legacyPresentation || reconstructMissingSite) {
+                upgradePresentation(level, site, platformY, plan);
+                data.markPresented(site, FarRelayStructurePlan.PRESENTATION_VERSION);
             }
             data.markInitialized(site, platformY);
-            data.markPresented(site, FarRelayStructurePlan.PRESENTATION_VERSION);
             return;
         }
 
         int platformY = findPlatformY(level, site);
         buildSite(level, site, platformY, plan);
-        if (!isComplete(level, site, platformY, plan, true, true)) {
+        if (!isFunctionalCoreComplete(level, site, platformY, plan, true)) {
             throw new IllegalStateException(
-                    "Far Relay site initialization incomplete: "
+                    "Far Relay functional core initialization incomplete: "
                             + site
                             + ", "
-                            + firstIncompleteRequirement(level, site, platformY, plan, true));
+                            + firstIncompleteFunctionalRequirement(
+                                    level, site, platformY, plan, true));
+        }
+        if (!isPresentationComplete(level, site, platformY, plan, true, true)) {
+            throw new IllegalStateException(
+                    "Far Relay presentation initialization incomplete: "
+                            + site
+                            + ", "
+                            + firstIncompletePresentationRequirement(
+                                    level, site, platformY, plan, true));
         }
         data.markInitialized(site, platformY);
         data.markPresented(site, FarRelayStructurePlan.PRESENTATION_VERSION);
@@ -217,15 +237,75 @@ public final class FarRelayInitializer {
         configureLootChest(level, site, platformY);
     }
 
-    private static void repairMarkedSite(
+    private static void repairFunctionalCore(
             ServerLevel level,
             RelaySite site,
             int platformY,
-            Plan plan,
-            boolean legacyPresentation) {
-        clearPlannedHeadroom(level, site, platformY, plan, true);
+            Plan plan) {
+        for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
+            for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
+                BlockPos floor = new BlockPos(
+                        site.x() + deltaX, platformY, site.z() + deltaZ);
+                replaceIfMissingOrReplaceable(
+                        level, floor, EchoContent.RELAY_STONE.get().defaultBlockState());
+                for (int deltaY = 1; deltaY <= 2; deltaY++) {
+                    if (!isFunctionalCorePosition(site, deltaX, deltaY, deltaZ)
+                            && plan.placementAt(deltaX, deltaY, deltaZ).isEmpty()) {
+                        clearIfReplaceable(level, floor.above(deltaY));
+                    }
+                }
+            }
+        }
+        boolean placedChest = replaceIfMissingOrReplaceable(
+                level,
+                chestPosition(site, platformY),
+                Blocks.CHEST.defaultBlockState());
+        if (placedChest) {
+            configureLootChest(level, site, platformY);
+        }
+        if (site == RelaySite.CENTRAL) {
+            replaceIfMissingOrReplaceable(
+                    level,
+                    new BlockPos(site.x() + 3, platformY + 1, site.z()),
+                    EchoContent.RETURN_TERMINAL.get().defaultBlockState());
+            replaceIfMissingOrReplaceable(
+                    level,
+                    new BlockPos(site.x() - 3, platformY + 1, site.z()),
+                    EchoContent.FUTURE_CONSOLE.get().defaultBlockState());
+        }
+    }
+
+    private static void upgradePresentation(
+            ServerLevel level,
+            RelaySite site,
+            int platformY,
+            Plan plan) {
+        clearDecorativeHeadroom(level, site, platformY, plan);
         for (Placement placement : plan.placements()) {
-            repairPlacement(level, site, platformY, placement, legacyPresentation);
+            if (!isFunctionalCorePlacement(site, placement)
+                    || isTerminal(placement.material())) {
+                repairPlacement(level, site, platformY, placement, true);
+            }
+        }
+    }
+
+    private static void clearDecorativeHeadroom(
+            ServerLevel level, RelaySite site, int platformY, Plan plan) {
+        for (Placement placement : plan.placements()) {
+            if (placement.y() != 0
+                    || placement.material() != Material.RELAY_STONE
+                    || isFunctionalCorePlacement(site, placement)) {
+                continue;
+            }
+            for (int y = 1; y <= 2; y++) {
+                if (plan.placementAt(placement.x(), y, placement.z()).isPresent()) {
+                    continue;
+                }
+                clearIfReplaceable(level, new BlockPos(
+                        site.x() + placement.x(),
+                        platformY + y,
+                        site.z() + placement.z()));
+            }
         }
     }
 
@@ -283,7 +363,43 @@ public final class FarRelayInitializer {
         }
     }
 
-    private static boolean isComplete(
+    private static boolean isFunctionalCoreComplete(
+            ServerLevel level,
+            RelaySite site,
+            int platformY,
+            Plan plan,
+            boolean requirePendingLoot) {
+        for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
+            for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
+                BlockPos floor = new BlockPos(
+                        site.x() + deltaX, platformY, site.z() + deltaZ);
+                if (!level.getBlockState(floor).is(EchoContent.RELAY_STONE.get())) {
+                    return false;
+                }
+                for (int deltaY = 1; deltaY <= 2; deltaY++) {
+                    if (!isFunctionalCorePosition(site, deltaX, deltaY, deltaZ)
+                            && plan.placementAt(deltaX, deltaY, deltaZ).isEmpty()
+                            && !level.getBlockState(floor.above(deltaY)).isAir()) {
+                        return false;
+                    }
+                }
+            }
+        }
+        BlockEntity blockEntity = level.getBlockEntity(chestPosition(site, platformY));
+        if (!(blockEntity instanceof ChestBlockEntity chest)
+                || requirePendingLoot && chest.getLootTable() != FarRelayKeys.LOOT_TABLE) {
+            return false;
+        }
+        if (site != RelaySite.CENTRAL) {
+            return true;
+        }
+        return level.getBlockState(new BlockPos(site.x() + 3, platformY + 1, site.z()))
+                        .is(EchoContent.RETURN_TERMINAL.get())
+                && level.getBlockState(new BlockPos(site.x() - 3, platformY + 1, site.z()))
+                        .is(EchoContent.FUTURE_CONSOLE.get());
+    }
+
+    private static boolean isPresentationComplete(
             ServerLevel level,
             RelaySite site,
             int platformY,
@@ -323,7 +439,51 @@ public final class FarRelayInitializer {
                 && (!requirePendingLoot || chest.getLootTable() == FarRelayKeys.LOOT_TABLE);
     }
 
-    private static String firstIncompleteRequirement(
+    private static String firstIncompleteFunctionalRequirement(
+            ServerLevel level,
+            RelaySite site,
+            int platformY,
+            Plan plan,
+            boolean requirePendingLoot) {
+        for (int deltaX = -PLATFORM_RADIUS; deltaX <= PLATFORM_RADIUS; deltaX++) {
+            for (int deltaZ = -PLATFORM_RADIUS; deltaZ <= PLATFORM_RADIUS; deltaZ++) {
+                BlockPos floor = new BlockPos(
+                        site.x() + deltaX, platformY, site.z() + deltaZ);
+                if (!level.getBlockState(floor).is(EchoContent.RELAY_STONE.get())) {
+                    return "platform=" + floor + " state=" + level.getBlockState(floor);
+                }
+                for (int deltaY = 1; deltaY <= 2; deltaY++) {
+                    BlockPos clearance = floor.above(deltaY);
+                    if (!isFunctionalCorePosition(site, deltaX, deltaY, deltaZ)
+                            && plan.placementAt(deltaX, deltaY, deltaZ).isEmpty()
+                            && !level.getBlockState(clearance).isAir()) {
+                        return "clearance="
+                                + clearance
+                                + " state="
+                                + level.getBlockState(clearance);
+                    }
+                }
+            }
+        }
+        BlockEntity blockEntity = level.getBlockEntity(chestPosition(site, platformY));
+        if (!(blockEntity instanceof ChestBlockEntity chest)) {
+            return "chest="
+                    + chestPosition(site, platformY)
+                    + " state="
+                    + level.getBlockState(chestPosition(site, platformY));
+        }
+        if (requirePendingLoot && chest.getLootTable() != FarRelayKeys.LOOT_TABLE) {
+            return "chest_loot_table=" + chest.getLootTable();
+        }
+        if (site == RelaySite.CENTRAL
+                && !level.getBlockState(new BlockPos(site.x() + 3, platformY + 1, site.z()))
+                        .is(EchoContent.RETURN_TERMINAL.get())) {
+            return "return_terminal_missing";
+        }
+        return "future_console_missing";
+    }
+
+    private static String firstIncompletePresentationRequirement(
             ServerLevel level,
             RelaySite site,
             int platformY,
@@ -380,6 +540,57 @@ public final class FarRelayInitializer {
 
     private static boolean isTerminal(Material material) {
         return material == Material.RETURN_TERMINAL || material == Material.FUTURE_CONSOLE;
+    }
+
+    private static boolean replaceIfMissingOrReplaceable(
+            ServerLevel level, BlockPos position, BlockState required) {
+        BlockState current = level.getBlockState(position);
+        if (current.is(required.getBlock())) {
+            return false;
+        }
+        if (!current.canBeReplaced()) {
+            return false;
+        }
+        level.setBlock(position, required, Block.UPDATE_ALL);
+        return true;
+    }
+
+    private static void clearIfReplaceable(ServerLevel level, BlockPos position) {
+        BlockState current = level.getBlockState(position);
+        if (!current.isAir() && current.canBeReplaced()) {
+            level.setBlock(position, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+        }
+    }
+
+    private static boolean isFunctionalCorePosition(
+            RelaySite site, int x, int y, int z) {
+        if (x == 0 && y == 1 && z == 3) {
+            return true;
+        }
+        return site == RelaySite.CENTRAL
+                && y == 1
+                && z == 0
+                && Math.abs(x) == 3;
+    }
+
+    static boolean isFunctionalCorePlacement(RelaySite site, Placement placement) {
+        if (placement.material() == Material.RELAY_STONE
+                && placement.y() == 0
+                && Math.abs(placement.x()) <= PLATFORM_RADIUS
+                && Math.abs(placement.z()) <= PLATFORM_RADIUS) {
+            return true;
+        }
+        if (placement.material() == Material.LOOT_CHEST
+                && placement.x() == 0
+                && placement.y() == 1
+                && placement.z() == 3) {
+            return true;
+        }
+        if (site != RelaySite.CENTRAL || placement.y() != 1 || placement.z() != 0) {
+            return false;
+        }
+        return placement.x() == 3 && placement.material() == Material.RETURN_TERMINAL
+                || placement.x() == -3 && placement.material() == Material.FUTURE_CONSOLE;
     }
 
     private static void configureLootChest(ServerLevel level, RelaySite site, int platformY) {
