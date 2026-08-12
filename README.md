@@ -60,7 +60,7 @@ The release property must be exactly `true`. Before any release Java or resource
 
 After verification, the gate materializes an owner-only, read-only staging tree at `.gradle/release-source` directly from validated HEAD Git blobs. It binds that snapshot to the exact commit and committed source digest captured when Gradle configured the build, then records both values in `.gradle/release-source/.afterlight-release-stage-manifest`. Release main and test Java compilation and resource processing consume only that staged snapshot, and generated provenance reads its identity from the authenticated manifest. The gate rejects a HEAD change before or after staging. A post-build audit revalidates current HEAD, staged bytes, the manifest identity, and the mutable working tree before the release contract can pass. Build, cache, log, and runtime output directories are excluded, so generated artifacts and the staging tree never enter the source digest. Ordinary developer builds continue to use working source paths and remain usable with dirty regular files.
 
-The JAR contract verifies the exact reviewed inventory and metadata, fixed timestamps, stable entry order, source provenance, all-entry secret and punctuation audits, parsed class-reference isolation from client-only namespaces, and byte-identical independent archive construction. CI checks out the exact source SHA twice into separate directories, assigns separate Gradle user homes, runs the full clean release command independently in each checkout, and then compares `afterlight-signal-0.1.0+1.21.1.jar` byte for byte.
+The JAR contract verifies the exact reviewed inventory and metadata, fixed timestamps, stable entry order, source provenance, all-entry secret and punctuation audits, parsed class-reference isolation from client-only namespaces, and byte-identical independent archive construction. CI checks out the exact source SHA twice into separate directories, assigns separate Gradle user homes, runs the full clean release command independently in each checkout, and then compares `afterlight-signal-0.2.0+1.21.1.jar` byte for byte.
 
 ## Gate Recovery
 
@@ -73,11 +73,11 @@ The JAR contract verifies the exact reviewed inventory and metadata, fixed times
 - Staging failure: verify that `.gradle` and `.gradle/release-source` are real repository-local directories, remove `.gradle/release-source` if necessary, and rerun the exact release command from a clean committed tree. Never point either path at a symbolic link.
 - Missing or changed provenance: do not edit the stage manifest or generated files under `build/`. Restore the reviewed commit as HEAD, remove `.gradle/release-source`, and rerun the exact release command from a clean committed tree.
 
-The release artifact is `build/libs/afterlight-signal-0.1.0+1.21.1.jar`. Generate integration checksums only after all gates pass:
+The release artifact is `build/libs/afterlight-signal-0.2.0+1.21.1.jar`. Generate integration checksums only after all gates pass:
 
 ```sh
-shasum -a 256 build/libs/afterlight-signal-0.1.0+1.21.1.jar
-shasum -a 512 build/libs/afterlight-signal-0.1.0+1.21.1.jar
+shasum -a 256 build/libs/afterlight-signal-0.2.0+1.21.1.jar
+shasum -a 512 build/libs/afterlight-signal-0.2.0+1.21.1.jar
 ```
 
 Tags and published assets are immutable. Never reuse a release tag or replace a published JAR.
