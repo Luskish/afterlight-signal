@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.rllabs.afterlight.visual.VisualSceneCatalog;
@@ -46,6 +48,24 @@ class VisualAcceptanceHarnessTest {
                 VisualAcceptanceHarness.expectedArtifacts());
         assertEquals(4_800, VisualAcceptanceHarness.timeoutTicks());
         assertEquals(12, VisualAcceptanceHarness.stableSceneTicks());
+    }
+
+    @Test
+    void inventoryCapturePlanNeverEntersCreativeMode() throws Exception {
+        Path source = Path.of(System.getProperty("afterlight.source.root", "."))
+                .toAbsolutePath()
+                .normalize()
+                .resolve("src/test/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java");
+        String harness = Files.readString(source);
+        int planStart = harness.indexOf("private List<Step> buildSteps()");
+        int inventoryRequirement = harness.indexOf(
+                "addScreenAwait(planned, 1920, 1080, InventoryScreen.class)", planStart);
+
+        assertTrue(planStart >= 0, "missing visual capture plan");
+        assertTrue(inventoryRequirement > planStart, "missing exact inventory screen requirement");
+        assertFalse(
+                harness.substring(planStart, inventoryRequirement).contains("gamemode creative"),
+                "visual capture enters creative mode before requiring InventoryScreen");
     }
 
     @Test

@@ -269,7 +269,6 @@ public final class VisualAcceptanceHarness {
         });
         planned.add(() -> {
             minecraft.options.hideGui = false;
-            command("gamemode creative");
             command("item replace entity @s weapon.mainhand with afterlight:echo");
             command("tp @s 64.5 101 12.5 180 8");
         });
