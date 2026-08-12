@@ -36,6 +36,16 @@ The lock context is mandatory and selects the committed dependency graph for the
 
 The build still rejects symlinked and hardlinked source inputs because Gradle must never consume an aliased source tree. This source gate requires POSIX permissions and the `unix:nlink` file attribute, so developer and release builds are supported on macOS and Linux POSIX filesystems. Native Windows filesystems are not supported by the source gate. Use Linux CI or WSL backed by a POSIX filesystem instead.
 
+### Dedicated Relay Migration Acceptance
+
+Run the restart-aware custom-dimension acceptance with:
+
+```sh
+./tools/run-dedicated-migration-acceptance.sh
+```
+
+The focused GameTest keeps migration mechanics fast and deterministic inside the vanilla GameTest level. GameTestServer does not load custom dimensions, so proof of the real `afterlight:far_relay` route belongs in this isolated dedicated acceptance. The runner creates a fresh pre-v2 world, stops it, restarts the same world, invokes the public production Gate route from the Overworld, validates migration and idempotence, and invokes the production return route. Both processes use one fresh challenge and authenticated phase markers. Set `AFTERLIGHT_LOCK_CONTEXT=linux` only when running the dedicated acceptance on Linux.
+
 ## Release Build
 
 Release artifacts use the exact source-bound command:

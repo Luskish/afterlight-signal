@@ -305,6 +305,12 @@ class ReleaseJarContractTest {
         assertTrue(Files.isRegularFile(ROOT.resolve(
                 "src/test/java/org/rllabs/afterlight/gate/VisualAcceptanceServerHarness.java")));
         assertTrue(Files.isRegularFile(ROOT.resolve(
+                "src/test/java/org/rllabs/afterlight/acceptance/"
+                        + "DedicatedMigrationAcceptanceHarness.java")));
+        assertTrue(Files.isRegularFile(ROOT.resolve(
+                "src/test/java/org/rllabs/afterlight/acceptance/"
+                        + "DedicatedMigrationAcceptanceMarker.java")));
+        assertTrue(Files.isRegularFile(ROOT.resolve(
                 "src/test/java/org/rllabs/afterlight/client/VisualSceneProbe.java")));
         assertTrue(Files.isDirectory(ROOT.resolve(
                 "src/test/java/org/rllabs/afterlight/visual")));
@@ -314,6 +320,9 @@ class ReleaseJarContractTest {
                 "src/main/java/org/rllabs/afterlight/client/VisualAcceptanceHarness.java")));
         assertFalse(Files.exists(ROOT.resolve(
                 "src/main/java/org/rllabs/afterlight/gate/VisualAcceptanceServerHarness.java")));
+        assertFalse(Files.exists(ROOT.resolve(
+                "src/main/java/org/rllabs/afterlight/acceptance/"
+                        + "DedicatedMigrationAcceptanceHarness.java")));
 
         try (var zip = new ZipFile(RELEASE_JAR.toFile())) {
             Set<String> entries = Collections.list(zip.entries()).stream()
@@ -330,6 +339,8 @@ class ReleaseJarContractTest {
             assertFalse(entries.stream().anyMatch(name -> name.contains("VisualAcceptance")));
             assertFalse(entries.stream().anyMatch(name -> name.startsWith(
                     "org/rllabs/afterlight/visual/")));
+            assertFalse(entries.stream().anyMatch(name -> name.contains(
+                    "DedicatedMigrationAcceptance")));
             assertFalse(entries.contains("visual-acceptance/server.properties"));
         }
     }

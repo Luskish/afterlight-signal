@@ -158,6 +158,90 @@ public final class FarRelayGameTests {
             template = TEMPLATE,
             batch = "afterlight_far_relay_revalidation",
             timeoutTicks = 1200)
+    public static void currentPresentationRepairsMissingTerminalsToExactPlannedState(
+            GameTestHelper helper) {
+        ServerLevel relay = helper.getLevel();
+        restorePreviousTestObstruction(relay);
+        FarRelayInitializer.ensureAll(relay);
+        FarRelaySavedData data = FarRelaySavedData.get(relay);
+        int floorY = data.platformY(RelaySite.CENTRAL).orElseThrow();
+        FarRelayStructurePlan.Plan plan = FarRelayStructurePlan.forSite(RelaySite.CENTRAL);
+        FarRelayStructurePlan.Placement returnPlacement =
+                plan.placementAt(3, 1, 0).orElseThrow();
+        FarRelayStructurePlan.Placement consolePlacement =
+                plan.placementAt(-3, 1, 0).orElseThrow();
+        BlockPos returnPosition = FarRelayStructurePlan.worldPosition(
+                RelaySite.CENTRAL, floorY, returnPlacement);
+        BlockPos consolePosition = FarRelayStructurePlan.worldPosition(
+                RelaySite.CENTRAL, floorY, consolePlacement);
+        BlockState expectedReturn = terminalState(returnPlacement);
+        BlockState expectedConsole = terminalState(consolePlacement);
+
+        helper.assertValueEqual(
+                data.presentationVersion(RelaySite.CENTRAL),
+                FarRelayStructurePlan.PRESENTATION_VERSION,
+                "current presentation version");
+        try {
+            relay.setBlock(returnPosition, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+            relay.setBlock(consolePosition, Blocks.AIR.defaultBlockState(), Block.UPDATE_ALL);
+
+            FarRelayInitializer.ensureAll(relay);
+
+            helper.assertValueEqual(
+                    relay.getBlockState(returnPosition),
+                    expectedReturn,
+                    "recovered return terminal state");
+            helper.assertValueEqual(
+                    relay.getBlockState(consolePosition),
+                    expectedConsole,
+                    "recovered future console state");
+            Map<BlockPos, BlockState> recovered = Map.of(
+                    returnPosition, relay.getBlockState(returnPosition),
+                    consolePosition, relay.getBlockState(consolePosition));
+            data.setDirty(false);
+
+            FarRelayInitializer.ensureAll(relay);
+
+            helper.assertValueEqual(
+                    Map.of(
+                            returnPosition, relay.getBlockState(returnPosition),
+                            consolePosition, relay.getBlockState(consolePosition)),
+                    recovered,
+                    "second terminal recovery ensure");
+            helper.assertFalse(data.isDirty(), "second terminal recovery dirtied saved data");
+
+            BlockState customReturn = expectedReturn
+                    .setValue(SignalTerminalBlock.FACING, Direction.SOUTH)
+                    .setValue(SignalTerminalBlock.ACTIVE, false);
+            BlockState customConsole = expectedConsole
+                    .setValue(SignalTerminalBlock.FACING, Direction.NORTH)
+                    .setValue(SignalTerminalBlock.ACTIVE, false);
+            relay.setBlock(returnPosition, customReturn, Block.UPDATE_ALL);
+            relay.setBlock(consolePosition, customConsole, Block.UPDATE_ALL);
+
+            FarRelayInitializer.ensureAll(relay);
+
+            helper.assertValueEqual(
+                    relay.getBlockState(returnPosition),
+                    customReturn,
+                    "current custom return terminal state");
+            helper.assertValueEqual(
+                    relay.getBlockState(consolePosition),
+                    customConsole,
+                    "current custom future console state");
+        } finally {
+            relay.setBlock(returnPosition, expectedReturn, Block.UPDATE_ALL);
+            relay.setBlock(consolePosition, expectedConsole, Block.UPDATE_ALL);
+            FarRelayInitializer.ensureAll(relay);
+        }
+        helper.succeed();
+    }
+
+    @GameTest(
+            templateNamespace = "minecraft",
+            template = TEMPLATE,
+            batch = "afterlight_far_relay_revalidation",
+            timeoutTicks = 1200)
     public static void fullyMissingLegacyMarkedSiteRecoversAtFallbackHeight(
             GameTestHelper helper) {
         ServerLevel relay = helper.getLevel();
@@ -373,6 +457,16 @@ public final class FarRelayGameTests {
                     EchoContent.FUTURE_CONSOLE.get(),
                     "central future console");
         }
+    }
+
+    private static BlockState terminalState(FarRelayStructurePlan.Placement placement) {
+        BlockState state = switch (placement.material()) {
+            case RETURN_TERMINAL -> EchoContent.RETURN_TERMINAL.get().defaultBlockState();
+            case FUTURE_CONSOLE -> EchoContent.FUTURE_CONSOLE.get().defaultBlockState();
+            default -> throw new IllegalArgumentException("Placement is not a terminal: " + placement);
+        };
+        return state.setValue(SignalTerminalBlock.FACING, placement.facing())
+                .setValue(SignalTerminalBlock.ACTIVE, placement.active());
     }
 
     private static Block expectedBlock(FarRelayStructurePlan.Material material) {

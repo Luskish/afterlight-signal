@@ -17,10 +17,64 @@ base {
 }
 
 def dedicatedAcceptanceMarker = layout.buildDirectory.file('dedicated-acceptance-success.txt')
+def dedicatedMigrationPrepareMarker =
+        layout.buildDirectory.file('dedicated-migration-prepare.txt')
+def dedicatedMigrationSuccessMarker =
+        layout.buildDirectory.file('dedicated-migration-success.txt')
 def visualAcceptanceOutput = layout.buildDirectory.dir('visual-artifacts')
 def visualServerMarker = layout.buildDirectory.file('visual-server-ready.txt')
 def visualServerProperties = layout.projectDirectory.file(
         'src/test/resources/visual-acceptance/server.properties')
+def dedicatedAcceptanceEnabled =
+        providers.gradleProperty('afterlightDedicatedAcceptance').orNull == 'true'
+def dedicatedMigrationEnabled =
+        providers.gradleProperty('afterlightDedicatedMigrationAcceptance').orNull == 'true'
+def dedicatedMigrationPhase =
+        providers.gradleProperty('afterlightDedicatedMigrationPhase').orNull
+def dedicatedMigrationToken =
+        providers.gradleProperty('afterlightDedicatedMigrationToken').orNull
+if (dedicatedAcceptanceEnabled && dedicatedMigrationEnabled) {
+    throw new GradleException(
+            'Fresh dedicated acceptance and migration acceptance cannot run together')
+}
+if (dedicatedMigrationEnabled) {
+    if (!(dedicatedMigrationPhase in ['prepare', 'verify'])) {
+        throw new GradleException(
+                'afterlightDedicatedMigrationPhase must be prepare or verify')
+    }
+    if (dedicatedMigrationToken == null
+            || !(dedicatedMigrationToken ==~ /[0-9a-f]{64}/)) {
+        throw new GradleException(
+                'afterlightDedicatedMigrationToken must be 64 lowercase hexadecimal characters')
+    }
+}
+def verifyDedicatedMigrationMarker = {
+    File marker, String expectedPhase, String expectedToken ->
+    if (!marker.isFile()) {
+        throw new GradleException("Dedicated migration marker is missing: ${marker}")
+    }
+    def lines = marker.readLines('UTF-8')
+    if (lines.size() < 3 || lines[0] != 'AFTERLIGHT_DEDICATED_MIGRATION_V1') {
+        throw new GradleException('Dedicated migration marker header is invalid')
+    }
+    def values = [:]
+    lines.drop(1).each { line ->
+        int separator = line.indexOf('=')
+        if (separator <= 0 || separator == line.length() - 1) {
+            throw new GradleException('Dedicated migration marker entry is invalid')
+        }
+        String key = line.substring(0, separator)
+        String value = line.substring(separator + 1)
+        if (values.put(key, value) != null) {
+            throw new GradleException(
+                    "Dedicated migration marker key is duplicated: ${key}")
+        }
+    }
+    if (values.phase != expectedPhase || values.token != expectedToken) {
+        throw new GradleException(
+                'Dedicated migration marker challenge or phase is invalid')
+    }
+}
 
 java {
     toolchain {
@@ -70,12 +124,25 @@ neoForge {
             programArgument '--nogui'
         }
         gameTestServer {
-            if (providers.gradleProperty('afterlightDedicatedAcceptance').orNull == 'true') {
+            if (dedicatedAcceptanceEnabled) {
                 server()
                 gameDirectory = layout.buildDirectory.dir('dedicated-acceptance')
                 systemProperty 'afterlight.dedicated.acceptance', 'true'
                 systemProperty 'afterlight.dedicated.acceptance.marker',
                         dedicatedAcceptanceMarker.get().asFile.absolutePath
+                programArgument '--nogui'
+            } else if (dedicatedMigrationEnabled) {
+                server()
+                gameDirectory = layout.buildDirectory.dir('dedicated-migration-acceptance')
+                systemProperty 'afterlight.dedicated.migration.acceptance', 'true'
+                systemProperty 'afterlight.dedicated.migration.phase', dedicatedMigrationPhase
+                systemProperty 'afterlight.dedicated.migration.token', dedicatedMigrationToken
+                systemProperty 'afterlight.dedicated.migration.marker',
+                        (dedicatedMigrationPhase == 'prepare'
+                                ? dedicatedMigrationPrepareMarker
+                                : dedicatedMigrationSuccessMarker).get().asFile.absolutePath
+                systemProperty 'afterlight.dedicated.migration.prepare-marker',
+                        dedicatedMigrationPrepareMarker.get().asFile.absolutePath
                 programArgument '--nogui'
             } else {
                 type = "gameTestServer"
@@ -252,7 +319,7 @@ tasks.withType(Test).configureEach {
 }
 
 tasks.named('runGameTestServer') {
-    if (providers.gradleProperty('afterlightDedicatedAcceptance').orNull == 'true') {
+    if (dedicatedAcceptanceEnabled) {
         doFirst {
             def directory = layout.buildDirectory.dir('dedicated-acceptance').get().asFile
             dedicatedAcceptanceMarker.get().asFile.delete()
@@ -269,6 +336,43 @@ spawn-protection=0
             if (!dedicatedAcceptanceMarker.get().asFile.isFile()) {
                 throw new GradleException('Dedicated acceptance did not write its success marker')
             }
+        }
+    } else if (dedicatedMigrationEnabled) {
+        doFirst {
+            def directory = layout.buildDirectory.dir(
+                    'dedicated-migration-acceptance').get().asFile
+            if (dedicatedMigrationPhase == 'prepare') {
+                dedicatedMigrationPrepareMarker.get().asFile.delete()
+                dedicatedMigrationSuccessMarker.get().asFile.delete()
+                project.delete(directory)
+                directory.mkdirs()
+                new File(directory, 'eula.txt').text = 'eula=true\n'
+                new File(directory, 'server.properties').text = '''\
+online-mode=false
+server-ip=127.0.0.1
+server-port=0
+spawn-protection=0
+level-seed=afterlight-dedicated-migration
+generate-structures=false
+'''
+            } else {
+                verifyDedicatedMigrationMarker(
+                        dedicatedMigrationPrepareMarker.get().asFile,
+                        'prepare',
+                        dedicatedMigrationToken)
+                dedicatedMigrationSuccessMarker.get().asFile.delete()
+                if (!new File(directory, 'world/level.dat').isFile()) {
+                    throw new GradleException(
+                            'Dedicated migration verify has no persisted prepared world')
+                }
+            }
+        }
+        doLast {
+            def marker = dedicatedMigrationPhase == 'prepare'
+                    ? dedicatedMigrationPrepareMarker.get().asFile
+                    : dedicatedMigrationSuccessMarker.get().asFile
+            verifyDedicatedMigrationMarker(
+                    marker, dedicatedMigrationPhase, dedicatedMigrationToken)
         }
     }
 }

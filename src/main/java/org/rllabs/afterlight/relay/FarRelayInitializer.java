@@ -264,15 +264,37 @@ public final class FarRelayInitializer {
             configureLootChest(level, site, platformY);
         }
         if (site == RelaySite.CENTRAL) {
-            replaceIfMissingOrReplaceable(
-                    level,
-                    new BlockPos(site.x() + 3, platformY + 1, site.z()),
-                    EchoContent.RETURN_TERMINAL.get().defaultBlockState());
-            replaceIfMissingOrReplaceable(
-                    level,
-                    new BlockPos(site.x() - 3, platformY + 1, site.z()),
-                    EchoContent.FUTURE_CONSOLE.get().defaultBlockState());
+            repairFunctionalTerminal(level, site, platformY, plan, 3);
+            repairFunctionalTerminal(level, site, platformY, plan, -3);
         }
+    }
+
+    private static void repairFunctionalTerminal(
+            ServerLevel level,
+            RelaySite site,
+            int platformY,
+            Plan plan,
+            int terminalX) {
+        Placement placement = plan.placementAt(terminalX, 1, 0).orElseThrow(
+                () -> new IllegalStateException(
+                        "Far Relay central terminal placement is unavailable: " + terminalX));
+        BlockPos position = FarRelayStructurePlan.worldPosition(site, platformY, placement);
+        BlockState current = level.getBlockState(position);
+        BlockState recovered = terminalRecoveryState(current, placement);
+        if (!current.equals(recovered)) {
+            level.setBlock(position, recovered, Block.UPDATE_ALL);
+        }
+    }
+
+    static BlockState terminalRecoveryState(BlockState current, Placement placement) {
+        if (!isTerminal(placement.material())) {
+            throw new IllegalArgumentException("Placement is not a terminal: " + placement);
+        }
+        BlockState required = stateFor(placement);
+        if (current.is(required.getBlock()) || !current.canBeReplaced()) {
+            return current;
+        }
+        return required;
     }
 
     private static void upgradePresentation(

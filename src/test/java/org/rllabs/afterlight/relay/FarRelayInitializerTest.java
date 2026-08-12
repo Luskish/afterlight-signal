@@ -8,11 +8,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import net.minecraft.core.Direction;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import org.junit.jupiter.api.Test;
+import org.rllabs.afterlight.EchoContent;
 
 class FarRelayInitializerTest {
     @Test
@@ -114,6 +118,54 @@ class FarRelayInitializerTest {
         data.setDirty(false);
         assertFalse(data.markPresented(RelaySite.EAST, 2));
         assertFalse(data.isDirty());
+    }
+
+    @Test
+    void currentPresentationTerminalRecoveryUsesPlanAndPreservesCustomState() {
+        FarRelaySavedData data = new FarRelaySavedData();
+        data.markInitialized(RelaySite.CENTRAL, 64);
+        data.markPresented(
+                RelaySite.CENTRAL, FarRelayStructurePlan.PRESENTATION_VERSION);
+        FarRelayStructurePlan.Plan plan = FarRelayStructurePlan.forSite(RelaySite.CENTRAL);
+        FarRelayStructurePlan.Placement returnPlacement =
+                plan.placementAt(3, 1, 0).orElseThrow();
+        FarRelayStructurePlan.Placement consolePlacement =
+                plan.placementAt(-3, 1, 0).orElseThrow();
+        BlockState expectedReturn = EchoContent.RETURN_TERMINAL
+                .get()
+                .defaultBlockState()
+                .setValue(SignalTerminalBlock.FACING, Direction.WEST)
+                .setValue(SignalTerminalBlock.ACTIVE, true);
+        BlockState expectedConsole = EchoContent.FUTURE_CONSOLE
+                .get()
+                .defaultBlockState()
+                .setValue(SignalTerminalBlock.FACING, Direction.EAST)
+                .setValue(SignalTerminalBlock.ACTIVE, true);
+
+        assertEquals(
+                FarRelayStructurePlan.PRESENTATION_VERSION,
+                data.presentationVersion(RelaySite.CENTRAL));
+        assertEquals(
+                expectedReturn,
+                FarRelayInitializer.terminalRecoveryState(
+                        Blocks.AIR.defaultBlockState(), returnPlacement));
+        assertEquals(
+                expectedConsole,
+                FarRelayInitializer.terminalRecoveryState(
+                        Blocks.SHORT_GRASS.defaultBlockState(), consolePlacement));
+
+        BlockState customReturn = expectedReturn
+                .setValue(SignalTerminalBlock.FACING, Direction.SOUTH)
+                .setValue(SignalTerminalBlock.ACTIVE, false);
+        BlockState customConsole = expectedConsole
+                .setValue(SignalTerminalBlock.FACING, Direction.NORTH)
+                .setValue(SignalTerminalBlock.ACTIVE, false);
+        assertEquals(
+                customReturn,
+                FarRelayInitializer.terminalRecoveryState(customReturn, returnPlacement));
+        assertEquals(
+                customConsole,
+                FarRelayInitializer.terminalRecoveryState(customConsole, consolePlacement));
     }
 
     @Test
