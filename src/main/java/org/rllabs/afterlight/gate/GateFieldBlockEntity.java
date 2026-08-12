@@ -56,6 +56,7 @@ public final class GateFieldBlockEntity extends BlockEntity {
 
     boolean authorizesTravel(ServerLevel level, BlockPos position) {
         if (!linked) {
+            removeField(level, position);
             return false;
         }
         if (ownerPosition == null

@@ -439,7 +439,7 @@ public final class GateControllerGameTests {
     }
 
     @GameTest(templateNamespace = "minecraft", template = TEMPLATE, timeoutTicks = 40)
-    public static void legacyFieldWithoutLinkMarkerRemainsStandalone(GameTestHelper helper) {
+    public static void fieldWithoutLinkMarkerRemovesItself(GameTestHelper helper) {
         BlockPos relativePosition = fieldPosition();
         helper.setBlock(relativePosition, EchoContent.GATE_FIELD.get());
         GateFieldBlockEntity field = helper.getBlockEntity(relativePosition);
@@ -449,7 +449,7 @@ public final class GateControllerGameTests {
         reloadField(helper, relativePosition, saved);
 
         helper.runAfterDelay(2L, () -> {
-            helper.assertBlockPresent(EchoContent.GATE_FIELD.get(), relativePosition);
+            helper.assertBlockNotPresent(EchoContent.GATE_FIELD.get(), relativePosition);
             helper.succeed();
         });
     }

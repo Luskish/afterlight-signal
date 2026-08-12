@@ -23,14 +23,16 @@ public final class GateFieldGameTests {
         BlockPos waterPosition = fieldPosition.above();
         helper.setBlock(fieldPosition, EchoContent.GATE_FIELD.get());
         helper.setBlock(waterPosition, Blocks.WATER);
-        helper.getLevel().scheduleTick(helper.absolutePos(waterPosition), Fluids.WATER, 1);
+        BlockPos absoluteWaterPosition = helper.absolutePos(waterPosition);
+        Fluids.WATER.tick(
+                helper.getLevel(),
+                absoluteWaterPosition,
+                helper.getLevel().getFluidState(absoluteWaterPosition));
 
-        helper.runAfterDelay(10, () -> {
-            helper.assertBlockPresent(EchoContent.GATE_FIELD.get(), fieldPosition);
-            helper.assertTrue(
-                    helper.getLevel().getFluidState(helper.absolutePos(fieldPosition)).isEmpty(),
-                    "gate field accepted flowing water");
-            helper.succeed();
-        });
+        helper.assertBlockPresent(EchoContent.GATE_FIELD.get(), fieldPosition);
+        helper.assertTrue(
+                helper.getLevel().getFluidState(helper.absolutePos(fieldPosition)).isEmpty(),
+                "gate field accepted flowing water");
+        helper.succeed();
     }
 }
