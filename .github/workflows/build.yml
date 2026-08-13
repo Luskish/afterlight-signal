@@ -47,8 +47,8 @@ jobs:
         run: gradle clean test runGameTestServer build verifyReleaseJar -PafterlightRelease=true -PafterlightLockContext=linux --no-daemon --no-build-cache --rerun-tasks
       - name: Compare and audit independent builds
         run: |
-          first=source-a/build/libs/afterlight-signal-0.2.0+1.21.1.jar
-          second=source-b/build/libs/afterlight-signal-0.2.0+1.21.1.jar
+          first=source-a/build/libs/afterlight-signal-0.2.1+1.21.1.jar
+          second=source-b/build/libs/afterlight-signal-0.2.1+1.21.1.jar
           shasum -a 256 "$first"
           shasum -a 256 "$second"
           cmp --silent "$first" "$second"

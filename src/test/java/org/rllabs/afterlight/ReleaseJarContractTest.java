@@ -62,10 +62,10 @@ class ReleaseJarContractTest {
     private static final Path POLICY = ROOT.resolve("tools/ReleaseSourcePolicy.java");
     private static final Path RELEASE_JAR = Path.of(System.getProperty(
             "afterlight.release.jar",
-            ROOT.resolve("build/libs/afterlight-signal-0.2.0+1.21.1.jar").toString()));
+            ROOT.resolve("build/libs/afterlight-signal-0.2.1+1.21.1.jar").toString()));
     private static final Path REBUILT_JAR = Path.of(System.getProperty(
             "afterlight.rebuilt.release.jar",
-            ROOT.resolve("build/reproducible-libs/afterlight-signal-0.2.0+1.21.1.jar")
+            ROOT.resolve("build/reproducible-libs/afterlight-signal-0.2.1+1.21.1.jar")
                     .toString()));
     private static final LocalDateTime REPRODUCIBLE_TIMESTAMP =
             LocalDateTime.of(1980, 2, 1, 0, 0);
@@ -357,7 +357,7 @@ class ReleaseJarContractTest {
                     Map.of(
                             Attributes.Name.MANIFEST_VERSION.toString(), "1.0",
                             "Implementation-Title", "AFTERLIGHT Signal",
-                            "Implementation-Version", "0.2.0+1.21.1"),
+                            "Implementation-Version", "0.2.1+1.21.1"),
                     attributes);
 
             assertEquals(
@@ -368,7 +368,7 @@ class ReleaseJarContractTest {
 
                     [[mods]]
                     modId="afterlight"
-                    version="0.2.0"
+                    version="0.2.1"
                     displayName="AFTERLIGHT Signal"
                     authors="RLLabs"
                     description='''
@@ -444,7 +444,7 @@ class ReleaseJarContractTest {
             assertEquals(
                     Boolean.getBoolean("afterlight.release.build"),
                     provenance.get("releaseBuild").getAsBoolean());
-            assertEquals("0.2.0+1.21.1", provenance.get("version").getAsString());
+            assertEquals("0.2.1+1.21.1", provenance.get("version").getAsString());
         }
     }
 
@@ -1516,7 +1516,7 @@ class ReleaseJarContractTest {
 
         assertRejected(result, "expected_head_mismatch phase=before_stage");
         assertFalse(Files.exists(probe.repository().resolve(
-                "build/libs/afterlight-signal-0.2.0+1.21.1.jar")));
+                "build/libs/afterlight-signal-0.2.1+1.21.1.jar")));
     }
 
     @Test
@@ -2193,8 +2193,8 @@ class ReleaseJarContractTest {
 
     private static String expectedComparisonAndAuditCommand() {
         return """
-                first=source-a/build/libs/afterlight-signal-0.2.0+1.21.1.jar
-                second=source-b/build/libs/afterlight-signal-0.2.0+1.21.1.jar
+                first=source-a/build/libs/afterlight-signal-0.2.1+1.21.1.jar
+                second=source-b/build/libs/afterlight-signal-0.2.1+1.21.1.jar
                 shasum -a 256 "$first"
                 shasum -a 256 "$second"
                 cmp --silent "$first" "$second"

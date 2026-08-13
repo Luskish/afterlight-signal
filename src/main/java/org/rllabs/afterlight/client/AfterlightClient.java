@@ -3,6 +3,7 @@ package org.rllabs.afterlight.client;
 import java.io.IOException;
 import net.minecraft.client.Minecraft;
 import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -29,9 +30,13 @@ public final class AfterlightClient {
 
     AfterlightClient(ModContainer modContainer) {
         modContainer.registerConfig(ModConfig.Type.CLIENT, SignalClientConfig.SPEC);
-        NeoForge.EVENT_BUS.addListener(SignalTitleScreenHook::onScreenOpening);
+        registerTitleScreenHook(NeoForge.EVENT_BUS);
         NeoForge.EVENT_BUS.addListener(EchoTooltip::onTooltip);
         AfterlightPayloads.installClientOpenHandler(AfterlightClient::openApprovedScreen);
+    }
+
+    static void registerTitleScreenHook(IEventBus eventBus) {
+        eventBus.addListener(EventPriority.LOWEST, SignalTitleScreenHook::onScreenOpening);
     }
 
     static void registerDimensionEffects(RegisterDimensionSpecialEffectsEvent event) {

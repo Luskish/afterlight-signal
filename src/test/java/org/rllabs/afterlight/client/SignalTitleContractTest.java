@@ -26,7 +26,9 @@ import java.util.EnumMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import javax.imageio.ImageIO;
 import javax.imageio.ImageReader;
@@ -45,6 +47,7 @@ import net.minecraft.client.gui.screens.TitleScreen;
 import net.minecraft.client.gui.screens.options.OptionsScreen;
 import net.minecraft.client.gui.screens.worldselection.SelectWorldScreen;
 import net.minecraft.network.chat.Component;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.config.IConfigSpec;
@@ -67,13 +70,44 @@ class SignalTitleContractTest {
             Path.of("src/main/resources/assets/afterlight/textures/gui/title.png");
 
     @Test
-    void openingEventReplacesOnlyTheExactVanillaTitleScreen() {
+    void openingEventReplacesVanillaTitleScreen() {
         TitleScreen vanilla = new TitleScreen();
         ScreenEvent.Opening event = new ScreenEvent.Opening(null, vanilla);
 
         SignalTitleScreenHook.onScreenOpening(event);
 
         assertNotSame(vanilla, event.getNewScreen());
+        assertInstanceOf(SignalTitleScreen.class, event.getNewScreen());
+    }
+
+    @Test
+    void openingEventReplacesThirdPartyTitleScreenSubclass() {
+        TitleScreen thirdParty = new ThirdPartyTitleScreen();
+        ScreenEvent.Opening event = new ScreenEvent.Opening(null, thirdParty);
+
+        invokeHook(event, () -> true, SignalTitleScreen::new);
+
+        assertNotSame(thirdParty, event.getNewScreen());
+        assertInstanceOf(SignalTitleScreen.class, event.getNewScreen());
+    }
+
+    @Test
+    void clientRegistersTitleReplacementAfterCompetingMenuHooks() throws Exception {
+        AtomicReference<EventPriority> priority = new AtomicReference<>();
+        AtomicReference<Consumer<ScreenEvent.Opening>> listener = new AtomicReference<>();
+        IEventBus eventBus = recordingEventBus(priority, listener);
+        Method registration = AfterlightClient.class.getDeclaredMethod(
+                "registerTitleScreenHook", IEventBus.class);
+        registration.setAccessible(true);
+
+        registration.invoke(null, eventBus);
+
+        assertEquals(EventPriority.LOWEST, priority.get());
+        assertNotNull(listener.get());
+        TitleScreen competingMenu = new ThirdPartyTitleScreen();
+        ScreenEvent.Opening event = new ScreenEvent.Opening(null, competingMenu);
+        listener.get().accept(event);
+        assertNotSame(competingMenu, event.getNewScreen());
         assertInstanceOf(SignalTitleScreen.class, event.getNewScreen());
     }
 
@@ -433,6 +467,32 @@ class SignalTitleContractTest {
     }
 
     @SuppressWarnings("unchecked")
+    private static IEventBus recordingEventBus(
+            AtomicReference<EventPriority> priority,
+            AtomicReference<Consumer<ScreenEvent.Opening>> listener) {
+        return (IEventBus) Proxy.newProxyInstance(
+                IEventBus.class.getClassLoader(),
+                new Class<?>[] {IEventBus.class},
+                (proxy, method, arguments) -> {
+                    if (method.getName().equals("addListener")
+                            && arguments != null
+                            && arguments.length == 2
+                            && arguments[0] instanceof EventPriority eventPriority
+                            && arguments[1] instanceof Consumer<?> consumer) {
+                        priority.set(eventPriority);
+                        listener.set((Consumer<ScreenEvent.Opening>) consumer);
+                        return null;
+                    }
+                    return switch (method.getName()) {
+                        case "toString" -> "RecordingEventBus";
+                        case "hashCode" -> System.identityHashCode(proxy);
+                        case "equals" -> proxy == arguments[0];
+                        default -> throw new AssertionError("Unexpected event bus call: " + method);
+                    };
+                });
+    }
+
+    @SuppressWarnings("unchecked")
     private static List<String> statusLines(SignalTitleScreen screen) throws Exception {
         Method method = SignalTitleScreen.class.getDeclaredMethod("statusLines");
         method.setAccessible(true);
@@ -598,5 +658,8 @@ class SignalTitleContractTest {
         private StubScreen() {
             super(Component.literal("Stub"));
         }
+    }
+
+    private static final class ThirdPartyTitleScreen extends TitleScreen {
     }
 }

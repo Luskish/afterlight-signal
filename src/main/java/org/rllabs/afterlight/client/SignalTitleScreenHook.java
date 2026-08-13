@@ -31,7 +31,7 @@ public final class SignalTitleScreenHook {
             if (!this.enabled.getAsBoolean()
                     || original instanceof SignalTitleScreen
                     || original == null
-                    || original.getClass() != TitleScreen.class) {
+                    || !(original instanceof TitleScreen)) {
                 return;
             }
             event.setNewScreen(this.factory.get());

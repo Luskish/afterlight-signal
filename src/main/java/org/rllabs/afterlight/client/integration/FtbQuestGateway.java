@@ -1,5 +1,6 @@
 package org.rllabs.afterlight.client.integration;
 
+import dev.architectury.networking.NetworkManager;
 import dev.ftb.mods.ftblibrary.ui.Button;
 import dev.ftb.mods.ftbquests.client.ClientQuestFile;
 import dev.ftb.mods.ftbquests.net.ClaimRewardMessage;
@@ -19,7 +20,6 @@ import java.util.Map;
 import java.util.Objects;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.player.LocalPlayer;
-import net.neoforged.neoforge.network.PacketDistributor;
 import org.rllabs.afterlight.integration.EchoQuestGateway;
 import org.rllabs.afterlight.route.EchoQuestSnapshot;
 import org.rllabs.afterlight.route.EchoQuestSnapshot.RewardSnapshot;
@@ -272,17 +272,17 @@ public final class FtbQuestGateway implements EchoQuestGateway {
 
         @Override
         public void send(SubmitTaskMessage message) {
-            PacketDistributor.sendToServer(message);
+            NetworkManager.sendToServer(message);
         }
 
         @Override
         public void send(ClaimRewardMessage message) {
-            PacketDistributor.sendToServer(message);
+            NetworkManager.sendToServer(message);
         }
 
         @Override
         public void send(TogglePinnedMessage message) {
-            PacketDistributor.sendToServer(message);
+            NetworkManager.sendToServer(message);
         }
 
         @Override

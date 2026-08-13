@@ -156,7 +156,7 @@ dependencies {
     implementation("dev.ftb.mods:ftb-quests-neoforge:${ftb_quests_version}") { transitive false }
     implementation("dev.ftb.mods:ftb-library-neoforge:${ftb_library_version}") { transitive false }
     implementation("dev.ftb.mods:ftb-teams-neoforge:${ftb_teams_version}") { transitive false }
-    runtimeOnly("dev.architectury:architectury-neoforge:${architectury_version}") { transitive false }
+    implementation("dev.architectury:architectury-neoforge:${architectury_version}") { transitive false }
     testImplementation "org.junit.jupiter:junit-jupiter:5.11.4"
     testImplementation "org.snakeyaml:snakeyaml-engine:2.9"
     testRuntimeOnly "org.junit.platform:junit-platform-launcher"
