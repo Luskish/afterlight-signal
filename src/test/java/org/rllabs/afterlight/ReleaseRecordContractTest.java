@@ -22,10 +22,10 @@ class ReleaseRecordContractTest {
                     System.getProperty("afterlight.source.root", "."))
             .toAbsolutePath()
             .normalize();
-    private static final String RECORD_PATH = "docs/releases/0.2.0.md";
+    private static final String RECORD_PATH = "docs/releases/0.2.1.md";
     private static final String BLOCK_START = "<!-- AFTERLIGHT_RELEASE_RECORD_V1";
     private static final String BLOCK_END = "AFTERLIGHT_RELEASE_RECORD_END -->";
-    private static final String JAR = "afterlight-signal-0.2.0+1.21.1.jar";
+    private static final String JAR = "afterlight-signal-0.2.1+1.21.1.jar";
     private static final Set<String> SOURCE_COMMIT_FILES = Set.of(
             RECORD_PATH,
             "src/test/java/org/rllabs/afterlight/ReleaseRecordContractTest.java");
@@ -69,7 +69,7 @@ class ReleaseRecordContractTest {
                         "public_release"),
                 fields.keySet());
         assertEquals("1", fields.get("schema"));
-        assertEquals("0.2.0", fields.get("version"));
+        assertEquals("0.2.1", fields.get("version"));
         assertEquals(JAR, fields.get("jar"));
         assertEquals(JAR + "," + JAR + ".sha256," + JAR + ".sha512", fields.get("assets"));
 
@@ -146,7 +146,7 @@ class ReleaseRecordContractTest {
                 Map.entry("jar_sha512", sha512),
                 Map.entry(
                         "local_double_build",
-                        "PASS;copies=2;junit=335;gametests=59;sha256="
+                        "PASS;copies=2;junit=338;gametests=59;sha256="
                                 + sha256
                                 + ";sha512="
                                 + sha512),
@@ -176,7 +176,7 @@ class ReleaseRecordContractTest {
                 Map.entry("final_review", "APPROVE;critical=0;important=0"),
                 Map.entry(
                         "public_release",
-                        "PASS;url=https://github.com/Luskish/afterlight-signal/releases/tag/v0.2.0;assets=3;byte_equal=true"));
+                        "PASS;url=https://github.com/Luskish/afterlight-signal/releases/tag/v0.2.1;assets=3;byte_equal=true"));
     }
 
     private static void validateCompletedEvidence(
@@ -190,7 +190,7 @@ class ReleaseRecordContractTest {
         assertMatches(sha256, "[0-9a-f]{64}", "jar_sha256");
         assertMatches(sha512, "[0-9a-f]{128}", "jar_sha512");
         assertEquals(
-                "PASS;copies=2;junit=335;gametests=59;sha256="
+                "PASS;copies=2;junit=338;gametests=59;sha256="
                         + sha256
                         + ";sha512="
                         + sha512,
@@ -221,7 +221,7 @@ class ReleaseRecordContractTest {
                 "route_evidence");
         assertEquals("APPROVE;critical=0;important=0", fields.get("final_review"));
         assertEquals(
-                "PASS;url=https://github.com/Luskish/afterlight-signal/releases/tag/v0.2.0;assets=3;byte_equal=true",
+                "PASS;url=https://github.com/Luskish/afterlight-signal/releases/tag/v0.2.1;assets=3;byte_equal=true",
                 fields.get("public_release"));
     }
 
